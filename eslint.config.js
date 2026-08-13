@@ -70,6 +70,13 @@ export default tseslint.config(
       ],
     },
   },
+  {
+    name: 'aether/web/nuxt-pages',
+    files: ['apps/web/app/pages/**/*.vue'],
+    rules: {
+      'vue/multi-word-component-names': 'off',
+    },
+  },
   ...pluginQuery.configs['flat/recommended'].map((config) => ({
     ...config,
     name: `aether/web/${config.name ?? 'tanstack-query'}`,

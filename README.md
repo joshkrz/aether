@@ -6,15 +6,15 @@ The product and architecture source of truth is [SPEC.md](./SPEC.md).
 
 ## Status
 
-The project is in the specification and initial setup phase. The intended implementation is an npm-workspaces monorepo containing:
+The core domain foundation and initial Nuxt web shell are implemented in an npm-workspaces monorepo containing:
 
 - a Nuxt 4/Vue 3 web application;
 - an always-running Node.js/TypeScript climate engine;
-- shared domain and database packages;
+- a shared deterministic climate-core package;
 - MariaDB with Drizzle; and
 - Docker Compose for local deployment.
 
-Do not treat the proposed package layout as implemented until the corresponding files exist.
+Persistence, Home Assistant connectivity, and live engine-to-web data are not implemented yet.
 
 ## Core boundary
 
@@ -31,5 +31,15 @@ Room ⇄ Climate Controller → Plant → Energy Source
 - [SPEC.md](./SPEC.md) — living product and architecture specification
 - [CONTRIBUTING.md](./CONTRIBUTING.md) — development and change conventions
 - [AGENTS.md](./AGENTS.md) — repository guidance for coding agents
+- [DEPENDENCY_EXCEPTIONS.md](./DEPENDENCY_EXCEPTIONS.md) — approved temporary dependency-policy exceptions
 
-Setup and run instructions will be added when the initial workspace is scaffolded.
+## Run the web application
+
+Use Node.js 24.19 and npm 11.17, then run:
+
+```sh
+npm install
+npm run dev:web
+```
+
+The Nuxt development server is available at `http://localhost:3000` by default.
