@@ -30,29 +30,64 @@ The primary topology is:
 
 ```text
 Room ⇄ Climate Controller → Plant → Energy Source
-Room → Schedule
+Room ⇄ Schedule
 Room → Sensors / Window Surfaces
 ```
 
 ### 3.1 Installation
 
-The installation is the configuration and coordination boundary. It defines its IANA timezone, Home Assistant connection, global safety settings, and collections of all top-level entities.
+The installation is the configuration and coordination boundary. Its core representation defines the IANA timezone, display temperature unit, and collections of all top-level entities and normalized relationships.
+
+```ts
+interface Installation {
+  id: InstallationId;
+  name: string;
+  timeZone: string;
+  displayTemperatureUnit: 'celsius' | 'fahrenheit';
+  safety: InstallationSafetySettings;
+  rooms: Room[];
+  climateControllers: ClimateController[];
+  plants: Plant[];
+  energySources: EnergySource[];
+  schedules: Schedule[];
+  roomControllerLinks: RoomControllerLink[];
+  roomScheduleLinks: RoomScheduleLink[];
+  roomScheduleSelections: RoomScheduleSelection[];
+}
+
+interface InstallationSafetySettings {
+  minimumTargetTemperatureCelsius: number;
+  maximumTargetTemperatureCelsius: number;
+  maximumTelemetryAgeSeconds: number;
+  minimumCommandIntervalSeconds: number;
+  commandAcknowledgementTimeoutSeconds: number;
+}
+```
+
+Home Assistant connection details and credentials are engine-owned infrastructure configuration and never enter deterministic core policy.
+
+All safety values are explicit configuration; the core schema does not silently supply operational defaults. The minimum target must be lower than the maximum. An outgoing target must satisfy both the installation envelope and the controller entity's reported limits; out-of-range targets are rejected and explained rather than silently changed. Stale telemetry blocks new automatic heating or cooling commands. Command spacing applies per controller, although a safety-motivated `off` may bypass the interval and must be logged. A missing command acknowledgement triggers reconciliation rather than blind retries.
+
+Plant-specific active-controller limits, minimum run/rest durations, and source-switch settling remain in `PlantConstraints`. Temperature hysteresis belongs to deterministic demand policy rather than installation safety configuration.
 
 Schedule instants are evaluated in the installation timezone. DST gaps and repeated local times must be handled deterministically and tested.
 
+Core temperatures are stored and evaluated in Celsius. The engine converts Home Assistant readings and outgoing targets at the shell boundary when necessary. `displayTemperatureUnit` controls presentation only and does not change core calculations.
+
+Installation data is structurally parsed before a separate pure topology validation pass. Topology errors make a configuration invalid: duplicate IDs within an entity collection, duplicate controller `climate.*` entities, dangling controller-to-plant or plant-to-energy-source references, dangling or duplicate relationship links, duplicate room schedule-selection records, missing or unassigned selected schedules, and controller modes unsupported by their plant.
+
+Safe but incomplete setup is reported as warnings rather than errors: controllers with no room link, plants with no controller, and identical base and override schedule selections. Empty installations, rooms without controllers, rooms with no selected schedule, unassigned reusable schedules, unused energy sources, and sensor reuse across rooms remain valid. Textual IDs are unique within their entity type rather than globally across different entity types. Validation returns structured issues and never mutates installation configuration.
+
 ### 3.2 Room
 
-A room is the unit of comfort, sensing, prediction, and demand. A room may reference zero or more climate controllers, and a controller may serve one or more rooms. This is an explicit many-to-many relationship.
+A room is the unit of comfort, sensing, prediction, and demand. A room may be linked to zero or more climate controllers, and a controller may serve one or more rooms. This is an explicit many-to-many relationship.
 
 ```ts
 interface Room {
   id: string;
   name: string;
-  controllerIds: string[];
-  scheduleId: string;
   temperatureEntityId: string;
   humidityEntityId?: string;
-  occupancyEntityId?: string;
   windowOrDoorEntityIds?: string[];
   windows?: WindowSurface[];
 }
@@ -61,6 +96,8 @@ interface Room {
 Multiple controllers in one room are valid, including multiple indoor AC units plus a shared boiler controller. A shared controller may serve any number of rooms.
 
 The room temperature sensor may differ from a controller's internal sensor. Room demand and comfort use the configured room sensor; controller-reported temperature remains diagnostic input unless explicitly selected.
+
+Aether does not infer occupancy or presence. Home Assistant owns presence, calendar, and household-mode automation and may use those inputs to select a room's schedule through the engine API.
 
 ### 3.3 Climate Controller
 
@@ -81,7 +118,6 @@ interface ClimateController {
   name: string;
   entityId: ClimateEntityId;
   scope: ControllerScope;
-  roomIds: string[];
   plantId: string;
   capabilities: {
     heat: boolean;
@@ -96,6 +132,17 @@ interface ClimateController {
   manualOverridePolicy: ManualOverridePolicy;
 }
 ```
+
+The many-to-many relationship is stored once as normalized links:
+
+```ts
+interface RoomControllerLink {
+  roomId: RoomId;
+  controllerId: ClimateControllerId;
+}
+```
+
+Room-to-controller and controller-to-room collections are derived from these links. `Room.controllerIds` and `ClimateController.roomIds` are not persisted because duplicate writable lists could disagree. The database maps this relationship to a join table.
 
 `local` describes a controller whose effects are normally confined to its served room or rooms, such as an indoor split unit. `shared` describes a controller whose activation has consequences across several rooms, such as a boiler thermostat zone. Scope informs demand aggregation and explanations; it does not change the entity shape.
 
@@ -125,13 +172,19 @@ interface PlantConstraints {
   minimumOffMinutes?: number;
   settlingSeconds?: number;
 }
+
+interface EfficiencyModel {
+  type: 'fixed';
+  heatingPerformanceFactor: number;
+  coolingPerformanceFactor?: number;
+}
 ```
 
 All controllers that depend on the same physical outdoor unit or boiler reference the same plant. Reverse controller membership is derived from `controller.plantId`; duplicate writable membership lists are avoided.
 
 Plant constraints are evaluated against the complete proposed plant state, including manual controllers. For a multi-split with `allowMixedHeatCool: false`, no attached controller may automatically cool while another reserves or uses heating, or vice versa.
 
-Efficiency is modelled at plant level so it can account for outdoor conditions, combined load, active-controller count, capacities, minimum useful load, tariffs, and learned or measured performance. The MVP may use configured approximations. It may coordinate overlapping genuine demand across several controllers when beneficial, but must not manufacture demand in a comfortable room merely to increase plant load.
+Efficiency is modelled at plant level so it can account for outdoor conditions, combined load, active-controller count, capacities, minimum useful load, tariffs, and learned or measured performance. The MVP uses positive fixed performance factors: useful heating or cooling energy delivered per unit of source energy consumed. A later model may add configured curves or learned performance. The orchestrator may coordinate overlapping genuine demand across several controllers when beneficial, but must not manufacture demand in a comfortable room merely to increase plant load.
 
 ### 3.5 Energy Source
 
@@ -152,22 +205,49 @@ Cost and emissions are inputs to source selection, not safety constraints.
 
 ### 3.6 Schedule
 
-A schedule defines time-bounded comfort bands. Rooms reference schedules, allowing schedules to be reused.
+A schedule defines time-bounded comfort bands. Rooms and schedules have a many-to-many relationship, allowing each room to offer several schedules and each schedule to be reused by several rooms.
 
 ```ts
-interface ComfortBand {
+interface Schedule {
+  id: string;
+  name: string;
+  days: {
+    monday: SchedulePeriod[];
+    tuesday: SchedulePeriod[];
+    wednesday: SchedulePeriod[];
+    thursday: SchedulePeriod[];
+    friday: SchedulePeriod[];
+    saturday: SchedulePeriod[];
+    sunday: SchedulePeriod[];
+  };
+}
+
+interface SchedulePeriod {
+  startMinute: number;
+  endMinute: number;
   minimumTemperature: number;
   maximumTemperature: number;
 }
 
-interface Schedule {
-  id: string;
-  name: string;
-  weeklyPeriods: SchedulePeriod[];
+interface RoomScheduleLink {
+  roomId: RoomId;
+  scheduleId: ScheduleId;
+}
+
+interface RoomScheduleSelection {
+  roomId: RoomId;
+  baseScheduleId?: ScheduleId;
+  overrideScheduleId?: ScheduleId;
 }
 ```
 
-The minimum drives heating demand and the maximum drives cooling demand. Periods must cover time deterministically without overlaps.
+Each day is configured independently. An empty day is off for the full day, and gaps between periods are off. Off means the room produces no scheduled heating or cooling demand; it does not force shared equipment off when another room has genuine demand. Manual controller operation is unaffected.
+
+Both temperature bounds are required in every period. The minimum drives heating demand and the maximum drives cooling demand. Periods use inclusive start and exclusive end minutes in the installation's local day, cannot cross midnight, and cannot overlap. Adjacent periods are allowed. Temperatures are stored in the core's canonical Celsius unit.
+
+The base schedule is the room's normal selection. A temporary override takes precedence without replacing that base: the effective schedule is `overrideScheduleId ?? baseScheduleId`. Clearing an Away override therefore restores the currently selected Home or School Holiday schedule, including a base selection that Home Assistant changed while the override was active. With neither selection, the room is off.
+
+Both selected schedule IDs must be assigned to the room through `RoomScheduleLink`. The web UI and Home Assistant use the same engine operations to set a base schedule, set a temporary override, or clear an override. Aether does not interpret presence sensors or hard-code schedule roles such as Home, Away, or Occupied.
 
 ## 4. MVP boiler-zone semantics
 
@@ -294,6 +374,8 @@ apps/web
 
 `packages/core` is the functional climate core. It owns domain types, validation, demand calculation, controller eligibility, plant-constraint evaluation, source selection, interlock decisions, and other deterministic policy. It accepts plain typed inputs and returns plain typed results. It must not depend on Nuxt, Vue, databases, networks, filesystems, process state, wall-clock access, Home Assistant clients, or other side-effecting infrastructure.
 
+Core entities are plain serializable data defined by Zod runtime schemas, with TypeScript types inferred from those schemas. Core behaviour uses pure functions and discriminated unions rather than classes or inheritance. Classes are reserved for shell infrastructure with justified stateful lifecycle or resource ownership.
+
 `apps/engine` is the always-running Node.js/TypeScript imperative shell. It owns scheduling, clock access, persistence, Home Assistant communication, runtime reconciliation, command execution, process lifecycle, and other side effects. It translates external state into core inputs and executes only plans that pass final shell-level safety checks. Climate policy must not be implemented in the engine shell when it can live as deterministic core logic.
 
 `apps/web` is the Nuxt 4/Vue 3/TypeScript web shell. It owns configuration, dashboards, diagnostics, and user interaction. It may consume shared core types and explanations, but must not duplicate climate policy or communicate directly with Home Assistant to control equipment. Control requests go through the engine boundary.
@@ -312,7 +394,7 @@ MariaDB with Drizzle stores configuration, schedules, learned data, runtime owne
 
 The web app communicates with the engine through a small internal HTTP API; polling is sufficient initially, with SSE/WebSockets optional later. Do not add Redis, RabbitMQ, MQTT, Nx, or Turborepo without a demonstrated requirement.
 
-Tooling: Vite, ESLint, Prettier, Knip, Vitest, and Playwright. Unit tests must heavily cover demand, schedules, many-to-many topology, shared-controller aggregation, plant constraints, manual reservations, interlocks, source switching, and DST behaviour. A small end-to-end suite covers setup and critical control journeys.
+Tooling: Vite, ESLint, Prettier, Knip, Vitest, Playwright, and Zod 4. Unit tests must heavily cover demand, schedules, many-to-many topology, shared-controller aggregation, plant constraints, manual reservations, interlocks, source switching, and DST behaviour. A small end-to-end suite covers setup and critical control journeys.
 
 ## 11. User interface conventions
 

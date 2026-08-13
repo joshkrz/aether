@@ -39,6 +39,11 @@ Read `SPEC.md` before implementation. If code and the spec disagree, surface the
 
 - Preserve user changes and keep edits scoped.
 - Prefer simple, explicit TypeScript and data-driven policies.
+- Name files that primarily export a domain schema/type in PascalCase, matching the domain concept, for example `Room.ts` or `ClimateController.ts`.
+- Name utility, operation, and cross-entity policy files in camelCase, for example `topologyValidation.ts` or `sourceSelection.ts`. Do not use kebab-case filenames.
+- In `packages/core`, represent entities as plain data defined by Zod schemas and infer their TypeScript types from those schemas. Do not maintain duplicate handwritten interfaces.
+- Implement core behaviour with pure functions and discriminated unions. Do not use classes or class inheritance in the core.
+- Use classes in a shell only when genuinely stateful lifecycle or resource ownership makes them clearer, such as a persistent Home Assistant connection. Prefer interfaces, factories, and functions otherwise, and do not create broad classes that absorb climate policy.
 - Keep Vue components flat and descriptive; abstract behaviour or domain meaning, not trivial markup.
 - Add tests alongside climate-core behaviour changes.
 - Run the smallest relevant verification first, then broader checks before handoff.
