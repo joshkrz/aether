@@ -2,5 +2,15 @@
   "name": "@aether/engine",
   "version": "0.0.0",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "scripts": {
+    "build": "npm run build --workspace @aether/core && tsc --project tsconfig.build.json",
+    "dev": "npm run build --workspace @aether/core && node --watch src/main.ts",
+    "start": "node dist/main.js",
+    "test": "vitest run",
+    "typecheck": "npm run build --workspace @aether/core && tsc --noEmit --project tsconfig.json"
+  },
+  "dependencies": {
+    "@aether/core": "0.0.0"
+  }
 }

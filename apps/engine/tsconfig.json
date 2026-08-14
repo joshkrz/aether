@@ -1,11 +1,12 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "composite": true,
+    "allowImportingTsExtensions": true,
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
+    "noEmit": true,
+    "rewriteRelativeImportExtensions": true,
     "types": ["node"]
   },
-  "files": [],
-  "references": [{ "path": "../../packages/core" }]
+  "include": ["src/**/*.ts"]
 }
