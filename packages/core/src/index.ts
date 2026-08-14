@@ -3,6 +3,7 @@ export * from './EnergySource.js';
 export * from './HomeAssistant.js';
 export * from './identifiers.js';
 export * from './Installation.js';
+export * from './InstallationOverview.js';
 export * from './InstallationSafetySettings.js';
 export * from './installationTopologyValidation.js';
 export * from './ManualOverride.js';

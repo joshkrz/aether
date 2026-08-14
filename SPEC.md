@@ -394,6 +394,8 @@ MariaDB with Drizzle stores configuration, schedules, learned data, runtime owne
 
 The web app communicates with the engine through a small internal HTTP API; polling is sufficient initially, with SSE/WebSockets optional later. Do not add Redis, RabbitMQ, MQTT, Nx, or Turborepo without a demonstrated requirement.
 
+The initial read-only contract is `GET /api/v1/installation/overview`. It returns HTTP 200 with either `not_configured`, or `configured` plus installation identity, entity counts, and topology validity/error/warning counts. An invalid configured topology remains visible for diagnosis but cannot be used for control. This configuration overview has no timestamp; later live-state contracts expose explicit observation timestamps rather than implying freshness from response time.
+
 Tooling: Vite, ESLint, Prettier, Knip, Vitest, Playwright, and Zod 4. Unit tests must heavily cover demand, schedules, many-to-many topology, shared-controller aggregation, plant constraints, manual reservations, interlocks, source switching, and DST behaviour. A small end-to-end suite covers setup and critical control journeys.
 
 ## 11. User interface conventions
