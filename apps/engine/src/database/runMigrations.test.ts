@@ -15,18 +15,40 @@ const migrationCount = (client: ReturnType<typeof createDatabase>['client']): nu
   )?.count ?? 0;
 
 describe('runMigrations', () => {
-  it('applies the installation migration once', () => {
+  it('applies every known migration once', () => {
     const database = createDatabase(':memory:');
 
     runMigrations(database.client, databaseMigrations);
     runMigrations(database.client, databaseMigrations);
 
-    expect(migrationCount(database.client)).toBe(1);
+    expect(migrationCount(database.client)).toBe(databaseMigrations.length);
     expect(
       database.client
-        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'installation'")
-        .get(),
-    ).toEqual({ name: 'installation' });
+        .prepare(
+          `
+            SELECT name
+            FROM sqlite_schema
+            WHERE type = 'table'
+              AND name IN (
+                'installation',
+                'home_assistant_connection',
+                'home_assistant_user',
+                'home_assistant_oauth_credential',
+                'authentication_session',
+                'oauth_transaction'
+              )
+            ORDER BY name
+          `,
+        )
+        .all(),
+    ).toEqual([
+      { name: 'authentication_session' },
+      { name: 'home_assistant_connection' },
+      { name: 'home_assistant_oauth_credential' },
+      { name: 'home_assistant_user' },
+      { name: 'installation' },
+      { name: 'oauth_transaction' },
+    ]);
 
     database.close();
   });

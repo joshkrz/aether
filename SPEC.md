@@ -402,6 +402,22 @@ apps/engine ⇄ SQLite / Home Assistant / clock / network
 packages/core
 ```
 
+### 10.1 Authentication and transport security
+
+The standalone Unraid deployment delegates user authentication to Home Assistant through its OAuth 2/IndieAuth flow and does not maintain local user passwords. A future Home Assistant add-on may instead use Supervisor Ingress authentication. These modes must remain explicit; standalone deployments must never trust ingress identity headers.
+
+All authenticated Home Assistant users may view Aether, while Home Assistant administrator status is required for configuration or control. The engine keeps Home Assistant access and refresh tokens server-side and gives the browser only an opaque Aether session identifier in a host-only cookie with `HttpOnly`, `SameSite=Lax`, and `Path=/`. The cookie uses `Secure` whenever the public URL is HTTPS. Browser code must not receive or persist Home Assistant tokens. Unsafe API methods require origin validation and CSRF protection in addition to authentication.
+
+Engine authorization and user authorization are separate grants. The engine grant maintains the background Home Assistant connection independently of browser sessions; each normal user grant proves that user's identity and current role. Logging out or revoking a user session must not disconnect the engine. During first-run setup, one verified Home Assistant administrator authorizes the engine grant and receives a local bootstrap session from the same verified identity, avoiding a second immediate login without making that session the owner of the engine credential. Later sign-ins and engine reconnection use distinct OAuth transactions.
+
+The single Home Assistant instance origin is entered during onboarding and persisted in SQLite. Server-side token bundles are encrypted with versioned authenticated encryption using Node's built-in cryptography and a generated owner-readable key at `/config/aether-auth.key`. Raw session tokens, CSRF tokens, OAuth state, and OAuth browser-binding secrets are never persisted; only their cryptographic hashes are stored. The entire `/config` directory remains the required backup boundary.
+
+`AETHER_PUBLIC_URL` is the canonical externally visible origin used for OAuth callbacks, redirects, cookie security, and origin validation. It must be an absolute HTTP(S) origin without a path, query, or fragment, for example `https://aether.example.com`. The engine must not derive this security-sensitive value from forwarded headers. A reverse proxy may terminate HTTPS and communicate with the container over its private HTTP port.
+
+HTTPS is required by default. The exact opt-in `AETHER_ALLOW_INSECURE_HTTP=true` permits an `http://` public URL for local development or a trusted private network. In that mode the session cookie remains `HttpOnly` and `SameSite=Lax` but cannot use `Secure`, and the engine must emit a prominent warning. Insecure mode must never be silently enabled or presented as suitable for internet exposure. Missing, malformed, or insecure public URLs without the opt-in must fail fast once authentication is enabled.
+
+Once authentication is implemented, only a dedicated health endpoint and the endpoints required to complete OAuth are unauthenticated. The installation and control APIs require an authenticated session. The Docker health check must use the dedicated health endpoint rather than an authenticated application endpoint.
+
 SQLite with Drizzle stores configuration, schedules, learned data, runtime ownership, and audit history at `/config/aether.sqlite`. Only the engine opens the database. Schema migrations run before the engine begins serving requests, and the complete `/config` directory is the persistent backup boundary.
 
 Initial persistence uses the explicitly approved Drizzle ORM release candidate with Node's built-in `node:sqlite` adapter. This avoids a third-party native addon and its cross-platform Docker compilation toolchain. Pin the exact approved release-candidate version, do not use commit-specific snapshots, and move to stable Drizzle and `node:sqlite` releases once both are available in the supported Node LTS and the persistence tests pass unchanged. The database remains standard SQLite, so this dependency upgrade must not require a new storage format.
@@ -420,14 +436,16 @@ Delivery proceeds in this order:
 
 1. record and verify the single-container build boundary;
 2. add SQLite migrations and installation persistence;
-3. expose database-backed engine state in the generated web app;
-4. integrate read-only Home Assistant state;
-5. add configuration and entity discovery;
-6. implement control planning in independently tested core slices;
-7. add dry-run evaluation and command-intention audit records;
-8. add the external Home Assistant simulator;
-9. add live command execution only after separate approval; and
-10. publish the image and submit the Community Applications template.
+3. add Home Assistant connection, OAuth-credential, user, session, and transaction persistence;
+4. implement Home Assistant OAuth, engine authorization, user sessions, and API protection;
+5. expose protected database-backed engine state in the generated web app;
+6. persist the unified entity hierarchy, beginning with Energy Sources and Plants;
+7. integrate read-only Home Assistant state, entity discovery, and configuration;
+8. implement control planning in independently tested core slices;
+9. add dry-run evaluation and command-intention audit records;
+10. add the external Home Assistant simulator;
+11. add live command execution only after separate approval; and
+12. publish the image and submit the Community Applications template.
 
 Tooling: Vite, ESLint, Prettier, Knip, Vitest, Playwright, and Zod 4. Unit tests must heavily cover demand, schedules, many-to-many topology, shared-controller aggregation, plant constraints, manual reservations, interlocks, source switching, and DST behaviour. A small end-to-end suite covers setup and critical control journeys.
 

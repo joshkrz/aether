@@ -68,3 +68,33 @@ The container:
 - contains neither npm nor the development toolchain.
 
 The Dockerfile is platform-neutral. Local Apple Silicon builds produce `linux/arm64`; release publishing will build both `linux/amd64` for Unraid and `linux/arm64`.
+
+### Public URL and HTTPS
+
+The container declares the public-address settings that the future Home Assistant authentication implementation will enforce:
+
+- `AETHER_PUBLIC_URL` is the externally visible origin, such as `https://aether.example.com`. It must not include a path, query, or fragment.
+- `AETHER_ALLOW_INSECURE_HTTP` defaults to `false`. Only the exact value `true` opts into an HTTP public URL for local development or a trusted private network.
+
+For a reverse-proxied installation, HTTPS terminates at the proxy while the proxy may reach Aether over private HTTP on port 3001:
+
+```sh
+docker run --rm --name aether \
+  --publish 3001:3001 \
+  --volume aether-config:/config \
+  --env AETHER_PUBLIC_URL=https://aether.example.com \
+  aether:local
+```
+
+For an explicitly insecure private-LAN installation:
+
+```sh
+docker run --rm --name aether \
+  --publish 3001:3001 \
+  --volume aether-config:/config \
+  --env AETHER_PUBLIC_URL=http://192.168.1.50:3001 \
+  --env AETHER_ALLOW_INSECURE_HTTP=true \
+  aether:local
+```
+
+Insecure mode is not suitable for internet exposure. These variables are declared now to establish the container contract; they are not enforced until the Home Assistant authentication slice is implemented.

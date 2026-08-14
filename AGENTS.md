@@ -34,6 +34,11 @@ Read `SPEC.md` before implementation. If code and the spec disagree, surface the
 - Use `apps/engine` as the imperative Node.js shell for scheduling, persistence, Home Assistant communication, reconciliation, command execution, and process lifecycle.
 - Use `apps/web` as the Nuxt shell for configuration, dashboards, diagnostics, and user interaction.
 - Do not duplicate climate policy in either shell. The web app must not control Home Assistant directly; control requests go through the engine boundary.
+- Standalone authentication delegates identity to Home Assistant OAuth; do not add local passwords or expose Home Assistant tokens to browser code.
+- Keep Home Assistant OAuth tokens server-side and use an opaque, host-only, `HttpOnly`, `SameSite=Lax` Aether session cookie. Use `Secure` whenever the public URL is HTTPS.
+- Treat `AETHER_PUBLIC_URL` as the explicit canonical origin for OAuth callbacks, redirects, cookie security, and origin checks. Do not infer it from forwarded headers.
+- Require HTTPS unless the user explicitly sets `AETHER_ALLOW_INSECURE_HTTP=true`. Insecure mode is limited to local development or trusted private networks, must warn prominently, and must never be silently enabled.
+- Require authentication, authorization, origin validation, and CSRF protection as appropriate before adding mutating APIs. Keep the health endpoint independent of authenticated application APIs.
 
 ## Implementation style
 

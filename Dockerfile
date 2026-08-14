@@ -51,7 +51,9 @@ ENV NODE_ENV=production \
     AETHER_DATABASE_PATH=/config/aether.sqlite \
     AETHER_ENGINE_HOST=0.0.0.0 \
     AETHER_ENGINE_PORT=3001 \
-    AETHER_WEB_ROOT=/app/apps/web/public
+    AETHER_WEB_ROOT=/app/apps/web/public \
+    AETHER_PUBLIC_URL="" \
+    AETHER_ALLOW_INSECURE_HTTP=false
 
 COPY --from=build /usr/local/bin/node /usr/local/bin/node
 COPY --from=production-dependencies --chown=99:100 /runtime/node_modules ./node_modules
