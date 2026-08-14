@@ -338,6 +338,18 @@ The solar model combines deterministic sun geometry, forecast irradiance or clou
 
 ## 8. Safety, resilience, and reconciliation
 
+Command execution is an engine-shell safety setting, distinct from controller Automatic/Manual ownership and Home Assistant HVAC mode:
+
+```ts
+type CommandExecutionMode = 'dry_run' | 'live';
+```
+
+The engine defaults to `dry_run`; only an explicit exact `live` setting may enable Home Assistant equipment commands. Home Assistant state reading and command execution use separate interfaces, and the live command executor is not instantiated in dry-run mode.
+
+Dry-run mode reads and reconciles real Home Assistant state and runs the complete deterministic planning and safety pipeline. Aether configuration operations, including room schedule selection, still persist normally. Each proposed equipment command is stored as a structured audit record containing its decision/reason, target `climate.*` entity, intended service and payload, affected rooms and plant, and source-observation timestamps. Repeated equivalent intentions may be grouped or rate-limited for diagnostics.
+
+Dry-run mode never sends a Home Assistant service call, creates a synthetic acknowledgement, assumes a proposed command changed equipment state, or presents it as executed. The UI must label these records as “would execute” and show dry-run status prominently.
+
 - Validate every controllable entity ID as `climate.*`.
 - Apply target-temperature bounds and reject unsupported modes.
 - Enforce plant constraints both during planning and at the execution boundary.
@@ -378,23 +390,44 @@ Core entities are plain serializable data defined by Zod runtime schemas, with T
 
 `apps/engine` is the always-running Node.js/TypeScript imperative shell. It owns scheduling, clock access, persistence, Home Assistant communication, runtime reconciliation, command execution, process lifecycle, and other side effects. It translates external state into core inputs and executes only plans that pass final shell-level safety checks. Climate policy must not be implemented in the engine shell when it can live as deterministic core logic.
 
-`apps/web` is the Nuxt 4/Vue 3/TypeScript web shell. It owns configuration, dashboards, diagnostics, and user interaction. It may consume shared core types and explanations, but must not duplicate climate policy or communicate directly with Home Assistant to control equipment. Control requests go through the engine boundary.
+`apps/web` is the Nuxt 4/Vue 3/TypeScript web shell. It owns configuration, dashboards, diagnostics, and user interaction. It may consume shared core types and explanations, but must not duplicate climate policy or communicate directly with Home Assistant to control equipment. Development retains a separate Nuxt server; production generates a client-side application that the engine serves as static same-origin assets.
 
 ```text
-Home Assistant / database / clock / network
-                    ↓
-               apps/engine
-                    ↓
-              packages/core
-                    ↑
-                apps/web
+Browser
+   ↓
+generated apps/web assets served by apps/engine
+   ↓ same-origin /api
+apps/engine ⇄ SQLite / Home Assistant / clock / network
+   ↓
+packages/core
 ```
 
-MariaDB with Drizzle stores configuration, schedules, learned data, runtime ownership, and audit history. Docker Compose is the deployment baseline.
+SQLite with Drizzle stores configuration, schedules, learned data, runtime ownership, and audit history at `/config/aether.sqlite`. Only the engine opens the database. Schema migrations run before the engine begins serving requests, and the complete `/config` directory is the persistent backup boundary.
 
-The web app communicates with the engine through a small internal HTTP API; polling is sufficient initially, with SSE/WebSockets optional later. Do not add Redis, RabbitMQ, MQTT, Nx, or Turborepo without a demonstrated requirement.
+Initial persistence uses the explicitly approved Drizzle ORM release candidate with Node's built-in `node:sqlite` adapter. This avoids a third-party native addon and its cross-platform Docker compilation toolchain. Pin the exact approved release-candidate version, do not use commit-specific snapshots, and move to stable Drizzle and `node:sqlite` releases once both are available in the supported Node LTS and the persistence tests pass unchanged. The database remains standard SQLite, so this dependency upgrade must not require a new storage format.
+
+Production is one non-privileged container, one engine process, one HTTP port, and one `/config` mount. A multi-stage build compiles the core and engine, generates the Nuxt client application, and copies only their production output into the final image. Server-side rendering is not part of the production deployment; this does not make application data static.
+
+Unraid Community Applications is the primary distribution target. Aether publishes one container image and one template so it appears as one installable app and one Docker tile. The template exposes the web port and maps `/mnt/user/appdata/aether` to `/config`; Home Assistant remains external. Docker Compose may be used for local development or verification but is not required to run Aether.
+
+The generated web app communicates with the engine through its same-origin HTTP API; polling is sufficient initially, with SSE/WebSockets optional later. Frontend routes fall back to the generated `index.html`, while `/api/*` is reserved exclusively for engine routes. Do not add Redis, RabbitMQ, MQTT, Nx, or Turborepo without a demonstrated requirement.
 
 The initial read-only contract is `GET /api/v1/installation/overview`. It returns HTTP 200 with either `not_configured`, or `configured` plus installation identity, entity counts, and topology validity/error/warning counts. An invalid configured topology remains visible for diagnosis but cannot be used for control. This configuration overview has no timestamp; later live-state contracts expose explicit observation timestamps rather than implying freshness from response time.
+
+A future Home Assistant simulator is development infrastructure outside the production engine. It runs as a separate process and mimics only the Home Assistant API surface Aether actually uses, allowing the normal state reader and live command executor to be tested against deterministic states, acknowledgements, delays, failures, and external changes. It is deferred until the real Home Assistant dry-run integration establishes that required API surface.
+
+Delivery proceeds in this order:
+
+1. record and verify the single-container build boundary;
+2. add SQLite migrations and installation persistence;
+3. expose database-backed engine state in the generated web app;
+4. integrate read-only Home Assistant state;
+5. add configuration and entity discovery;
+6. implement control planning in independently tested core slices;
+7. add dry-run evaluation and command-intention audit records;
+8. add the external Home Assistant simulator;
+9. add live command execution only after separate approval; and
+10. publish the image and submit the Community Applications template.
 
 Tooling: Vite, ESLint, Prettier, Knip, Vitest, Playwright, and Zod 4. Unit tests must heavily cover demand, schedules, many-to-many topology, shared-controller aggregation, plant constraints, manual reservations, interlocks, source switching, and DST behaviour. A small end-to-end suite covers setup and critical control journeys.
 

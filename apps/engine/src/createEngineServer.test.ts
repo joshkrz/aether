@@ -10,8 +10,11 @@ const requestEngine = async (
   getInstallationOverview: InstallationOverviewProvider,
   path = '/api/v1/installation/overview',
   init?: RequestInit,
+  webRoot?: string,
 ): Promise<Response> => {
-  const server = createEngineServer(getInstallationOverview);
+  const server = createEngineServer(
+    webRoot === undefined ? { getInstallationOverview } : { getInstallationOverview, webRoot },
+  );
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
 
@@ -105,6 +108,23 @@ describe('createEngineServer', () => {
 
     expect(response.status).toBe(404);
     expect(providerWasCalled).toBe(false);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: 'not_found',
+      },
+    });
+  });
+
+  it('reserves unknown API paths for JSON when web serving is configured', async () => {
+    const response = await requestEngine(
+      () => ({ status: 'not_configured' }),
+      '/api/v1/unknown',
+      undefined,
+      '/web-root-that-must-not-be-read',
+    );
+
+    expect(response.status).toBe(404);
+    expect(response.headers.get('content-type')).toBe('application/json; charset=utf-8');
     await expect(response.json()).resolves.toEqual({
       error: {
         code: 'not_found',
