@@ -75,6 +75,7 @@ The container declares the public-address settings that the future Home Assistan
 
 - `AETHER_PUBLIC_URL` is the externally visible origin, such as `https://aether.example.com`. It must not include a path, query, or fragment.
 - `AETHER_ALLOW_INSECURE_HTTP` defaults to `false`. Only the exact value `true` opts into an HTTP public URL for local development or a trusted private network.
+- `AETHER_AUTH_KEY_PATH` defaults to `/config/aether-auth.key` in the container and identifies the owner-only key file used to encrypt Home Assistant OAuth credentials.
 
 For a reverse-proxied installation, HTTPS terminates at the proxy while the proxy may reach Aether over private HTTP on port 3001:
 

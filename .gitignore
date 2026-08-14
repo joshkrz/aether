@@ -32,4 +32,5 @@ test-results/
 *.log
 *.sqlite
 *.sqlite3
+aether-auth.key
 data/
