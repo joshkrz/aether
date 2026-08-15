@@ -114,7 +114,7 @@ A climate controller is the only controllable HVAC abstraction. Every controller
 - references exactly one plant;
 - serves one or more rooms;
 - declares `local` or `shared` scope; and
-- exposes resolved heating, cooling, and off capabilities.
+- exposes resolved heating, cooling, off, and optional fan-only capabilities.
 
 ```ts
 type ClimateEntityId = `climate.${string}`;
@@ -130,11 +130,17 @@ interface ClimateController {
     heat: boolean;
     cool: boolean;
     off: boolean;
+    fanOnly: boolean;
   };
   controlProfile: {
     heatingMode?: string;
     coolingMode?: string;
     offMode?: string;
+  };
+  postCoolingClean?: {
+    triggerAfterCoolingMinutes: number;
+    fanOnlyMode: string;
+    minimumFanMode: string;
   };
   manualOverridePolicy: ManualOverridePolicy;
 }
@@ -154,6 +160,14 @@ Room-to-controller and controller-to-room collections are derived from these lin
 `local` describes a controller whose effects are normally confined to its served room or rooms, such as an indoor split unit. `shared` describes a controller whose activation has consequences across several rooms, such as a boiler thermostat zone. Scope informs demand aggregation and explanations; it does not change the entity shape.
 
 Standard HA modes are discovered from `hvac_modes`: prefer `heat`, `cool`, and `off`. Ambiguous modes such as `auto` or `heat_cool` are not selected automatically. Advanced overrides may resolve unusual integrations. Aether determines and commands each automatically owned controller's HVAC mode. The controller does not choose between heating and cooling; `hvac_action` only reports the resulting physical activity and must not be confused with Aether's configured HVAC mode.
+
+`postCoolingClean` is an optional policy on an individual heat-pump Climate Controller. It is available only when that controller's Home Assistant entity exposes a usable fan-only HVAC mode and selectable fan modes. Home Assistant mode and fan-speed names are integration-specific, so setup stores the discovered `fanOnlyMode` and the fan mode that represents that device's minimum speed; Aether must not guess them. `triggerAfterCoolingMinutes` is a positive per-controller threshold. A configured cleaning cycle always requires 60 confirmed minutes in fan-only mode at that minimum speed.
+
+Only fresh observed time with `hvac_action: cooling` contributes to the controller's accumulated cooling runtime; time merely commanded to `cool` while idle does not. Accumulated runtime, pending-clean status, remaining cleaning minutes, and observation timestamps persist across engine restarts. Runtime resets only after the complete 60-minute cleaning cycle has been confirmed. Unavailable or stale activity data does not add runtime, and unacknowledged fan-only commands do not count as completed cleaning.
+
+When the threshold is reached, cleaning becomes pending for that controller. Aether starts or resumes it only when the deterministic plan contains no heating or cooling operation for that same controller throughout the next 60 minutes. Other controllers do not affect this availability decision. New demand for the controller interrupts cleaning immediately; its confirmed remaining minutes stay pending until Aether again finds a complete 60-minute device-specific window. Automatic cleaning obeys the controller's normal ownership and command-safety rules.
+
+Fan-only cleaning is a controller lifecycle action rather than thermal demand. It reserves neither the plant's heating nor cooling mode, does not count as active heating or cooling for source exclusivity, and may run while a separate boiler controller is heating. Physical controller availability and any explicit non-thermal device constraint remain authoritative.
 
 ### 3.4 Plant
 
@@ -234,6 +248,7 @@ interface SchedulePeriod {
   endMinute: number;
   minimumTemperature: number;
   maximumTemperature: number;
+  fanMode?: string;
   outdoorActivation?: {
     forecastLookaheadHours: number;
     minimumOpenMinutes: number;
@@ -263,6 +278,12 @@ interface RoomScheduleSelection {
 Each day is configured independently. An empty day is off for the full day, and gaps between periods are off. Off means the room produces no scheduled heating or cooling demand; it does not force shared equipment off when another room has genuine demand. Manual controller operation is unaffected.
 
 Both temperature bounds are required in every period, and the minimum must be lower than the maximum. A period describes a comfort range rather than a heating or cooling mode: its minimum is the exact automatic heating target and its maximum is the exact automatic cooling target. Aether does not calculate or substitute automatic target temperatures. Periods use inclusive start and exclusive end minutes in the installation's local day, cannot cross midnight, and cannot overlap. Adjacent periods are allowed. Temperatures are stored in the core's canonical Celsius unit.
+
+`fanMode` is an optional Home Assistant fan-mode value for heat-pump operation during that period. It is one selection for the whole comfort band and applies identically whether Aether commands a heat-pump controller to `heat` or `cool`; there are no separate heating and cooling fan-mode fields. Boiler controllers and controllers attached to any other non-heat-pump Plant ignore it. When omitted, Aether does not change the selected heat-pump controller's fan mode.
+
+Because schedules may be reused and rooms may have multiple heat-pump controllers, the configuration UI offers only the intersection of discovered fan modes supported by every relevant heat-pump controller linked to rooms assigned that schedule. Validation rejects a selected value that any such heat-pump controller does not expose. Boiler controllers do not participate in that intersection or validation. The selected value is sent only to an automatically owned heat-pump controller that Aether selects for thermal operation.
+
+Post-cooling cleaning temporarily overrides the period's `fanMode` with that controller's configured minimum speed. If scheduled thermal operation resumes, Aether interrupts cleaning and reapplies the effective period's `fanMode` when one is configured.
 
 Outdoor activation is optional per period and opt-in independently for the lower and upper sides. An omitted side retains normal comfort-band demand behaviour. A configured side adds an outdoor gate:
 
@@ -321,6 +342,7 @@ Inputs and schedules
 → evaluate complete plant constraints
 → estimate plant cost/efficiency
 → select a control plan
+→ evaluate pending per-controller cleaning
 → executor interlock
 → climate.* commands
 → observe and reconcile
@@ -392,6 +414,8 @@ Dry-run mode never sends a Home Assistant service call, creates a synthetic ackn
 
 - Validate every controllable entity ID as `climate.*`.
 - Apply target-temperature bounds and reject unsupported modes.
+- Reject a configured schedule-period fan mode unless every relevant heat-pump controller exposes it; never send that setting to a boiler controller.
+- Reject post-cooling cleaning configuration or commands when the controller does not expose the configured fan-only and fan-speed values.
 - Enforce plant constraints both during planning and at the execution boundary.
 - Use minimum on/off times, hysteresis, and command rate limits.
 - Persist decisions, overrides, and command correlation data.
@@ -410,8 +434,9 @@ Every automatic decision records:
 - demand and affected rooms;
 - eligible and rejected controllers with reasons;
 - plant constraints, reservations, and efficiency/cost estimates;
-- selected controller set, targets, and modes;
+- selected controller set, targets, HVAC modes, and heat-pump fan modes;
 - interlock and switching state;
+- accumulated cooling runtime and pending, running, interrupted, or completed per-controller cleaning state;
 - issued commands, acknowledgements, and failures.
 
 The UI must distinguish requested HVAC mode from actual `hvac_action`, show Manual and constrained states prominently, and answer "why is this running or inhibited?" without requiring log inspection.
@@ -505,7 +530,7 @@ Delivery proceeds in this order:
 11. add live command execution only after separate approval; and
 12. publish the image and submit the Community Applications template.
 
-Tooling: Vite, ESLint, Prettier, Knip, Vitest, Playwright, and Zod 4. Unit tests must heavily cover demand, schedules, outdoor-gate opt-in and hysteresis, forecast and missing-data behaviour, concurrent lower/upper gates, restart persistence, schedule-boundary timing, many-to-many topology, shared-controller aggregation, plant constraints, manual reservations, interlocks, source switching, and DST behaviour. A small end-to-end suite covers setup and critical control journeys.
+Tooling: Vite, ESLint, Prettier, Knip, Vitest, Playwright, and Zod 4. Unit tests must heavily cover demand, schedules, heat-pump-only period fan modes and shared capability validation, outdoor-gate opt-in and hysteresis, forecast and missing-data behaviour, concurrent lower/upper gates, restart persistence, schedule-boundary timing, per-controller post-cooling runtime and cleaning interruption, many-to-many topology, shared-controller aggregation, plant constraints, manual reservations, interlocks, source switching, and DST behaviour. A small end-to-end suite covers setup and critical control journeys.
 
 ## 11. User interface conventions
 
