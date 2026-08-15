@@ -56,7 +56,6 @@
     "workspaces": {
       "apps/web": {
         "ignoreDependencies": [
-          "vue",
           "vue-router",
           "vue-tsc"
         ]

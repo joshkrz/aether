@@ -52,7 +52,6 @@ ENV NODE_ENV=production \
     AETHER_ENGINE_HOST=0.0.0.0 \
     AETHER_ENGINE_PORT=3001 \
     AETHER_WEB_ROOT=/app/apps/web/public \
-    AETHER_PUBLIC_URL="" \
     AETHER_ALLOW_INSECURE_HTTP=false
 
 COPY --from=build /usr/local/bin/node /usr/local/bin/node
@@ -69,7 +68,7 @@ VOLUME ["/config"]
 STOPSIGNAL SIGTERM
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD ["node", "-e", "const port = process.env.AETHER_ENGINE_PORT || '3001'; fetch('http://127.0.0.1:' + port + '/api/v1/installation/overview').then((response) => { if (!response.ok) process.exit(1); }).catch(() => process.exit(1));"]
+  CMD ["node", "-e", "const port = process.env.AETHER_ENGINE_PORT || '3001'; fetch('http://127.0.0.1:' + port + '/api/v1/health').then((response) => { if (!response.ok) process.exit(1); }).catch(() => process.exit(1));"]
 
 ENTRYPOINT ["/usr/bin/dumb-init", "--"]
 CMD ["node", "apps/engine/dist/main.js"]

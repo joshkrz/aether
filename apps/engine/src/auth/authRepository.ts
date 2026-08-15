@@ -78,19 +78,22 @@ type BeginOAuthTransactionInput = {
   stateSecret: string;
 };
 
-export type CompleteAuthorizationInput = {
+type CompleteCredentialAuthorizationInput = {
   credential: {
     accessTokenExpiresAtEpochSeconds: number;
     id: string;
     tokenBundle: HomeAssistantTokenBundle;
   };
   nowEpochSeconds: number;
+  user: VerifiedHomeAssistantUser;
+};
+
+export type CompleteAuthorizationInput = CompleteCredentialAuthorizationInput & {
   session: {
     csrfToken: string;
     expiresAtEpochSeconds: number;
     token: string;
   };
-  user: VerifiedHomeAssistantUser;
 };
 
 type RevokeSessionResult =
@@ -106,7 +109,8 @@ export type AuthRepository = {
     deletedOauthTransactions: number;
     deletedSessions: number;
   };
-  completeEngineAuthorization: (input: CompleteAuthorizationInput) => AuthenticatedSession;
+  completeEngineReconnectAuthorization: (input: CompleteCredentialAuthorizationInput) => void;
+  completeEngineSetupAuthorization: (input: CompleteAuthorizationInput) => AuthenticatedSession;
   completeUserAuthorization: (input: CompleteAuthorizationInput) => AuthenticatedSession;
   consumeOAuthTransaction: (
     stateSecret: string,
@@ -225,7 +229,9 @@ const assertVerifiedUser = (user: VerifiedHomeAssistantUser): void => {
   }
 };
 
-const assertCompleteAuthorizationInput = (input: CompleteAuthorizationInput): void => {
+const assertCompleteCredentialAuthorizationInput = (
+  input: CompleteCredentialAuthorizationInput,
+): void => {
   assertVerifiedUser(input.user);
   assertNonEmptyText(input.credential.id, 'OAuth credential ID');
   assertEpochSeconds(input.nowEpochSeconds, 'Authorization time');
@@ -234,7 +240,9 @@ const assertCompleteAuthorizationInput = (input: CompleteAuthorizationInput): vo
   if (input.credential.accessTokenExpiresAtEpochSeconds <= input.nowEpochSeconds) {
     throw new Error('Access token expiry time must be after the authorization time');
   }
+};
 
+const assertAuthorizationSession = (input: CompleteAuthorizationInput): void => {
   assertSecret(input.session.token, 'Session token');
   assertSecret(input.session.csrfToken, 'CSRF token');
   assertPeriod(input.nowEpochSeconds, input.session.expiresAtEpochSeconds, 'Session');
@@ -387,11 +395,17 @@ export const createAuthRepository = (database: AetherDatabase, authKey: Buffer):
   };
 
   const completeAuthorization = (
-    input: CompleteAuthorizationInput,
+    input: CompleteCredentialAuthorizationInput,
     purpose: OAuthCredentialPurpose,
-    bootstrapSession: boolean,
-  ): AuthenticatedSession => {
-    assertCompleteAuthorizationInput(input);
+    engineFlow: 'reconnect' | 'setup' | undefined,
+    session: CompleteAuthorizationInput['session'] | undefined,
+  ): AuthenticatedSession | undefined => {
+    assertCompleteCredentialAuthorizationInput(input);
+
+    if (session !== undefined) {
+      assertAuthorizationSession({ ...input, session });
+    }
+
     const user = {
       ...input.user,
       displayName: input.user.displayName.trim(),
@@ -402,8 +416,8 @@ export const createAuthRepository = (database: AetherDatabase, authKey: Buffer):
       throw new Error('Engine authorization requires a Home Assistant administrator');
     }
 
-    const sessionTokenHash = hashAuthSecret(input.session.token);
-    const csrfTokenHash = hashAuthSecret(input.session.csrfToken);
+    const sessionTokenHash = session === undefined ? undefined : hashAuthSecret(session.token);
+    const csrfTokenHash = session === undefined ? undefined : hashAuthSecret(session.csrfToken);
 
     return database.query.transaction((transaction) => {
       const connection = transaction
@@ -416,8 +430,16 @@ export const createAuthRepository = (database: AetherDatabase, authKey: Buffer):
         throw new Error('Home Assistant connection must be prepared before authorization');
       }
 
+      if (engineFlow === 'setup' && connection.connectedAtEpochSeconds !== null) {
+        throw new Error('Home Assistant engine setup is already complete');
+      }
+
       if (purpose === 'user' && connection.connectedAtEpochSeconds === null) {
         throw new Error('Home Assistant engine must be connected before user authorization');
+      }
+
+      if (engineFlow === 'reconnect' && connection.connectedAtEpochSeconds === null) {
+        throw new Error('Home Assistant engine must be connected before reconnection');
       }
 
       const values = userValues(user, input.nowEpochSeconds);
@@ -498,15 +520,19 @@ export const createAuthRepository = (database: AetherDatabase, authKey: Buffer):
           .run();
       }
 
+      if (session === undefined || sessionTokenHash === undefined || csrfTokenHash === undefined) {
+        return undefined;
+      }
+
       transaction
         .insert(authenticationSessionTable)
         .values({
           createdAtEpochSeconds: input.nowEpochSeconds,
           csrfTokenHash,
-          expiresAtEpochSeconds: input.session.expiresAtEpochSeconds,
+          expiresAtEpochSeconds: session.expiresAtEpochSeconds,
           homeAssistantUserId: user.id,
           lastUsedAtEpochSeconds: input.nowEpochSeconds,
-          oauthCredentialId: bootstrapSession ? null : credentialId,
+          oauthCredentialId: purpose === 'engine' ? null : credentialId,
           revokedAtEpochSeconds: null,
           tokenHash: sessionTokenHash,
         })
@@ -515,12 +541,12 @@ export const createAuthRepository = (database: AetherDatabase, authKey: Buffer):
       return {
         createdAtEpochSeconds: input.nowEpochSeconds,
         displayName: user.displayName,
-        expiresAtEpochSeconds: input.session.expiresAtEpochSeconds,
+        expiresAtEpochSeconds: session.expiresAtEpochSeconds,
         homeAssistantUserId: user.id,
         isAdmin: user.isAdmin,
         isOwner: user.isOwner,
         lastUsedAtEpochSeconds: input.nowEpochSeconds,
-        ...(bootstrapSession ? {} : { oauthCredentialId: credentialId }),
+        ...(purpose === 'engine' ? {} : { oauthCredentialId: credentialId }),
       };
     });
   };
@@ -647,8 +673,27 @@ export const createAuthRepository = (database: AetherDatabase, authKey: Buffer):
 
       return { deletedOauthTransactions, deletedSessions };
     },
-    completeEngineAuthorization: (input) => completeAuthorization(input, 'engine', true),
-    completeUserAuthorization: (input) => completeAuthorization(input, 'user', false),
+    completeEngineReconnectAuthorization: (input) => {
+      completeAuthorization(input, 'engine', 'reconnect', undefined);
+    },
+    completeEngineSetupAuthorization: (input) => {
+      const session = completeAuthorization(input, 'engine', 'setup', input.session);
+
+      if (session === undefined) {
+        throw new Error('Engine setup did not create a bootstrap session');
+      }
+
+      return session;
+    },
+    completeUserAuthorization: (input) => {
+      const session = completeAuthorization(input, 'user', undefined, input.session);
+
+      if (session === undefined) {
+        throw new Error('User authorization did not create a session');
+      }
+
+      return session;
+    },
     consumeOAuthTransaction: (stateSecret, browserBindingSecret, nowEpochSeconds) => {
       assertSecret(stateSecret, 'OAuth state secret');
       assertSecret(browserBindingSecret, 'OAuth browser-binding secret');

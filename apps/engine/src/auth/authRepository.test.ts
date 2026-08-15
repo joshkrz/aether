@@ -103,7 +103,7 @@ const connectEngine = (repository: AuthRepository, nowEpochSeconds = 1_000) => {
     nowEpochSeconds: nowEpochSeconds + 2,
     user: adminUser,
   });
-  const session = repository.completeEngineAuthorization(input);
+  const session = repository.completeEngineSetupAuthorization(input);
 
   return { input, session };
 };
@@ -269,6 +269,90 @@ describe('createAuthRepository', () => {
     database.close();
   });
 
+  it('replaces the engine grant during reconnection without creating another session', () => {
+    const database = createMigratedDatabase();
+    const repository = createAuthRepository(database, authKey);
+    const original = connectEngine(repository);
+    const stateSecret = secret('reconnect-state');
+    const browserBindingSecret = secret('reconnect-browser');
+    const transaction = repository.beginOAuthTransaction({
+      browserBindingSecret,
+      createdAtEpochSeconds: 1_100,
+      expiresAtEpochSeconds: 1_400,
+      purpose: 'engine_reconnect',
+      returnPath: '/settings/home-assistant',
+      stateSecret,
+    });
+
+    expect(repository.consumeOAuthTransaction(stateSecret, browserBindingSecret, 1_101)).toEqual(
+      transaction,
+    );
+
+    const reconnectAuthorization = authorizationInput({
+      credentialId: 'ignored-reconnect-credential-id',
+      label: 'reconnected-engine',
+      nowEpochSeconds: 1_102,
+      user: adminUser,
+    });
+    const { session: unusedSession, ...reconnectInput } = reconnectAuthorization;
+
+    expect(repository.completeEngineReconnectAuthorization(reconnectInput)).toBeUndefined();
+    expect(repository.loadActiveEngineCredential()).toMatchObject({
+      id: original.input.credential.id,
+      tokenBundle: reconnectAuthorization.credential.tokenBundle,
+      updatedAtEpochSeconds: 1_102,
+    });
+    expect(repository.loadHomeAssistantConnection()).toEqual({
+      connectedAtEpochSeconds: 1_002,
+      createdAtEpochSeconds: 1_000,
+      origin: homeAssistantOrigin,
+      updatedAtEpochSeconds: 1_102,
+    });
+    expect(repository.loadActiveSession(original.input.session.token, 1_103)).toEqual(
+      original.session,
+    );
+    expect(repository.loadActiveSession(unusedSession.token, 1_103)).toBeUndefined();
+    expect(
+      database.client.prepare('SELECT count(*) AS count FROM authentication_session').get(),
+    ).toEqual({ count: 1 });
+
+    database.close();
+  });
+
+  it('enforces setup and reconnection against the matching connection state', () => {
+    const database = createMigratedDatabase();
+    const repository = createAuthRepository(database, authKey);
+    beginEngineSetup(repository);
+    const initialAuthorization = authorizationInput({
+      credentialId: 'engine-credential',
+      label: 'engine',
+      nowEpochSeconds: 1_002,
+      user: adminUser,
+    });
+    const reconnectInput = {
+      credential: initialAuthorization.credential,
+      nowEpochSeconds: initialAuthorization.nowEpochSeconds,
+      user: initialAuthorization.user,
+    };
+
+    expect(() => repository.completeEngineReconnectAuthorization(reconnectInput)).toThrow(
+      'Home Assistant engine must be connected before reconnection',
+    );
+    repository.completeEngineSetupAuthorization(initialAuthorization);
+    expect(() =>
+      repository.completeEngineSetupAuthorization(
+        authorizationInput({
+          credentialId: 'replacement-engine-credential',
+          label: 'replacement-engine',
+          nowEpochSeconds: 1_100,
+          user: adminUser,
+        }),
+      ),
+    ).toThrow('Home Assistant engine setup is already complete');
+
+    database.close();
+  });
+
   it('shares one user grant across multiple sessions without coupling it to the engine', () => {
     const database = createMigratedDatabase();
     const repository = createAuthRepository(database, authKey);
@@ -363,23 +447,24 @@ describe('createAuthRepository', () => {
     database.close();
   });
 
-  it('rolls back user, credential, and connection changes when session creation fails', () => {
+  it('rolls back user and credential changes when user session creation fails', () => {
     const database = createMigratedDatabase();
     const repository = createAuthRepository(database, authKey);
     const original = connectEngine(repository);
     const failingInput = authorizationInput({
-      credentialId: 'unused-engine-id',
-      label: 'replacement-engine',
+      credentialId: 'user-credential-that-must-roll-back',
+      label: 'failing-user',
       nowEpochSeconds: 1_100,
-      user: { ...adminUser, displayName: 'Name That Must Roll Back' },
+      user: { ...regularUser, displayName: 'Name That Must Roll Back' },
     });
     failingInput.session.token = original.input.session.token;
 
-    expect(() => repository.completeEngineAuthorization(failingInput)).toThrow();
+    expect(() => repository.completeUserAuthorization(failingInput)).toThrow();
     expect(repository.loadActiveEngineCredential()).toMatchObject({
       tokenBundle: original.input.credential.tokenBundle,
       updatedAtEpochSeconds: 1_002,
     });
+    expect(repository.loadActiveUserCredential(regularUser.id)).toBeUndefined();
     expect(repository.loadActiveSession(original.input.session.token, 1_101)?.displayName).toBe(
       adminUser.displayName,
     );

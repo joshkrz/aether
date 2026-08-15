@@ -45,6 +45,7 @@ interface Installation {
   timeZone: string;
   displayTemperatureUnit: 'celsius' | 'fahrenheit';
   safety: InstallationSafetySettings;
+  advanced: InstallationAdvancedSettings;
   rooms: Room[];
   climateControllers: ClimateController[];
   plants: Plant[];
@@ -62,13 +63,19 @@ interface InstallationSafetySettings {
   minimumCommandIntervalSeconds: number;
   commandAcknowledgementTimeoutSeconds: number;
 }
+
+interface InstallationAdvancedSettings {
+  outdoorActivationConfirmationSamples: number;
+}
 ```
 
 Home Assistant connection details and credentials are engine-owned infrastructure configuration and never enter deterministic core policy.
 
-All safety values are explicit configuration; the core schema does not silently supply operational defaults. The minimum target must be lower than the maximum. An outgoing target must satisfy both the installation envelope and the controller entity's reported limits; out-of-range targets are rejected and explained rather than silently changed. Stale telemetry blocks new automatic heating or cooling commands. Command spacing applies per controller, although a safety-motivated `off` may bypass the interval and must be logged. A missing command acknowledgement triggers reconciliation rather than blind retries.
+All safety values are explicit configuration; the core schema does not silently supply operational defaults. The minimum target must be lower than the maximum. An outgoing target must satisfy both the installation envelope and the controller entity's reported limits; out-of-range targets are rejected and explained rather than silently changed. Stale controller or plant telemetry blocks new automatic heating or cooling commands; missing outdoor-gate evidence follows the explicit fail-open rule in the schedule section. Command spacing applies per controller, although a safety-motivated `off` may bypass the interval and must be logged. A missing command acknowledgement triggers reconciliation rather than blind retries.
 
 Plant-specific active-controller limits, minimum run/rest durations, and source-switch settling remain in `PlantConstraints`. Temperature hysteresis belongs to deterministic demand policy rather than installation safety configuration.
+
+`outdoorActivationConfirmationSamples` is the installation-wide number of consecutive, distinct, fresh current-outdoor-temperature observations required to open or close a configured outdoor gate. It is an advanced deterministic-policy setting rather than a per-schedule tuning value and must be a positive integer. The engine maintains one installation-wide observation buffer so a newly active schedule period can evaluate current evidence immediately.
 
 Schedule instants are evaluated in the installation timezone. DST gaps and repeated local times must be handled deterministically and tested.
 
@@ -146,7 +153,7 @@ Room-to-controller and controller-to-room collections are derived from these lin
 
 `local` describes a controller whose effects are normally confined to its served room or rooms, such as an indoor split unit. `shared` describes a controller whose activation has consequences across several rooms, such as a boiler thermostat zone. Scope informs demand aggregation and explanations; it does not change the entity shape.
 
-Standard HA modes are discovered from `hvac_modes`: prefer `heat`, `cool`, and `off`. Ambiguous modes such as `auto` or `heat_cool` are not selected automatically. Advanced overrides may resolve unusual integrations. `hvac_action` indicates actual activity and must not be confused with the configured HVAC mode.
+Standard HA modes are discovered from `hvac_modes`: prefer `heat`, `cool`, and `off`. Ambiguous modes such as `auto` or `heat_cool` are not selected automatically. Advanced overrides may resolve unusual integrations. Aether determines and commands each automatically owned controller's HVAC mode. The controller does not choose between heating and cooling; `hvac_action` only reports the resulting physical activity and must not be confused with Aether's configured HVAC mode.
 
 ### 3.4 Plant
 
@@ -184,7 +191,7 @@ All controllers that depend on the same physical outdoor unit or boiler referenc
 
 Plant constraints are evaluated against the complete proposed plant state, including manual controllers. For a multi-split with `allowMixedHeatCool: false`, no attached controller may automatically cool while another reserves or uses heating, or vice versa.
 
-Efficiency is modelled at plant level so it can account for outdoor conditions, combined load, active-controller count, capacities, minimum useful load, tariffs, and learned or measured performance. The MVP uses positive fixed performance factors: useful heating or cooling energy delivered per unit of source energy consumed. A later model may add configured curves or learned performance. The orchestrator may coordinate overlapping genuine demand across several controllers when beneficial, but must not manufacture demand in a comfortable room merely to increase plant load.
+Efficiency is modelled at plant level so it can account for outdoor conditions, combined load, active-controller count, capacities, minimum useful load, tariffs, and learned or measured performance. The MVP uses positive fixed performance factors: useful heating or cooling energy delivered per unit of source energy consumed. A later model may add configured curves or learned performance. The orchestrator may coordinate overlapping genuine demand across several controllers when beneficial, but must not claim actual heating or cooling merely to increase plant load. An open schedule-period outdoor gate may place a controller in its scheduled mode and target while the room is within the comfort band; this is a readiness request, and the controller's reported `hvac_action` remains the source of truth for actual equipment activity.
 
 ### 3.5 Energy Source
 
@@ -227,6 +234,18 @@ interface SchedulePeriod {
   endMinute: number;
   minimumTemperature: number;
   maximumTemperature: number;
+  outdoorActivation?: {
+    forecastLookaheadHours: number;
+    minimumOpenMinutes: number;
+    lower?: {
+      openAtOrBelowCelsius: number;
+      closeAtOrAboveCelsius: number;
+    };
+    upper?: {
+      openAtOrAboveCelsius: number;
+      closeAtOrBelowCelsius: number;
+    };
+  };
 }
 
 interface RoomScheduleLink {
@@ -243,7 +262,25 @@ interface RoomScheduleSelection {
 
 Each day is configured independently. An empty day is off for the full day, and gaps between periods are off. Off means the room produces no scheduled heating or cooling demand; it does not force shared equipment off when another room has genuine demand. Manual controller operation is unaffected.
 
-Both temperature bounds are required in every period. The minimum drives heating demand and the maximum drives cooling demand. Periods use inclusive start and exclusive end minutes in the installation's local day, cannot cross midnight, and cannot overlap. Adjacent periods are allowed. Temperatures are stored in the core's canonical Celsius unit.
+Both temperature bounds are required in every period, and the minimum must be lower than the maximum. A period describes a comfort range rather than a heating or cooling mode: its minimum is the exact automatic heating target and its maximum is the exact automatic cooling target. Aether does not calculate or substitute automatic target temperatures. Periods use inclusive start and exclusive end minutes in the installation's local day, cannot cross midnight, and cannot overlap. Adjacent periods are allowed. Temperatures are stored in the core's canonical Celsius unit.
+
+Outdoor activation is optional per period and opt-in independently for the lower and upper sides. An omitted side retains normal comfort-band demand behaviour. A configured side adds an outdoor gate:
+
+- An open lower gate requests suitable automatically owned controllers in `heat` mode at the period's exact minimum target, even while the room is currently above that minimum.
+- An open upper gate requests suitable automatically owned controllers in `cool` mode at the period's exact maximum target, even while the room is currently below that maximum.
+- Aether determines and commands each selected controller's `heat`, `cool`, or `off` mode. The controller does not choose between heating and cooling. Its thermostat may cycle the physical equipment to maintain Aether's exact target, and its reported `hvac_action` records whether that equipment is currently `heating`, `cooling`, or `idle`.
+- Lower and upper gates may be open concurrently and are not a conflict by themselves. Heating and cooling controllers may therefore be prepared at opposite bounds of the same valid comfort range. Each controller may still receive only one representable mode, and normal controller capabilities and complete plant constraints—including multi-split mixed-mode restrictions—remain authoritative when forming the control plan.
+- Closing a gate withdraws that side's readiness request. Reconciliation turns an automatically owned controller off only when no other active room demand or readiness request still needs it. Manual controllers are unaffected.
+
+For example, with an 18–23 °C period and both gates open, Aether may command a boiler controller to `heat` at 18 °C and a separate AC controller to `cool` at 23 °C. At 17 °C the boiler may report `hvac_action: heating`; after reaching its lower target it may report `idle` while remaining in Aether's commanded `heat` mode. The AC remains in Aether's commanded `cool` mode and may report `hvac_action: cooling` only when cooling is physically active.
+
+For each configured side, current-temperature hysteresis uses its separate open and close threshold. A lower close threshold must be above its open threshold; an upper close threshold must be below its open threshold. Opening or closing from current observations requires `outdoorActivationConfirmationSamples` qualifying consecutive, distinct, fresh observations. A fresh forecast crossing an open threshold within `forecastLookaheadHours` opens that gate immediately without current-sample confirmation. A gate may close only when no qualifying fresh forecast remains and the required current observations satisfy its close threshold.
+
+Missing or stale forecast data is ignored when usable current outdoor data exists. If neither usable current outdoor data nor usable forecast data exists for a configured side, that gate fails open so the climate controller can enforce the schedule's temperature target locally. Returning outdoor data is then evaluated through the normal forecast and current-sample rules rather than causing an unconfirmed close.
+
+`minimumOpenMinutes` is the minimum gate-open duration, not a claim that the equipment's `hvac_action` remained active. A gate may open only when at least that many minutes remain in the current period; adjacent periods are not combined. Once open, its timer is not extended by later qualifying observations. It may not close before that timer expires, except when the current period ends or a safety, manual-ownership, or loss-of-control interlock takes precedence. Period end always withdraws the period's requests. Plant-level minimum on/off constraints remain separate and continue to protect physical equipment.
+
+Open-gate runtime state, including its side, opening reason, `openedAt`, and `minimumOpenUntil`, is persisted and reconciled after an engine restart. A restart must not shorten or restart the minimum-open duration, and stale persisted state from a period that has ended must not reactivate equipment.
 
 The base schedule is the room's normal selection. A temporary override takes precedence without replacing that base: the effective schedule is `overrideScheduleId ?? baseScheduleId`. Clearing an Away override therefore restores the currently selected Home or School Holiday schedule, including a base selection that Home Assistant changed while the override was active. With neither selection, the room is off.
 
@@ -278,6 +315,7 @@ Inputs and schedules
 → resolve ownership/manual state
 → predict room temperature
 → calculate room demand
+→ evaluate schedule-period outdoor gates
 → find capable controllers
 → aggregate consequences of shared controllers
 → evaluate complete plant constraints
@@ -288,7 +326,7 @@ Inputs and schedules
 → observe and reconcile
 ```
 
-Selection must account for comfort, controller scope, rooms affected, plant availability, existing reservations, efficiency, energy price, hysteresis, and minimum run/rest periods. Marginal economic changes must not cause rapid source switching.
+Selection must account for comfort, outdoor-gate readiness requests, controller scope, rooms affected, plant availability, existing reservations, efficiency, energy price, hysteresis, and minimum run/rest periods. Normal ungated demand may use room readings and prediction. For a configured open side, Aether determines and commands the HVAC mode from the outdoor-gate request, and the schedule supplies the exact target. Room temperature and prediction do not replace that target; the controller merely reports the resulting physical `hvac_action`. Marginal economic changes must not cause rapid source switching.
 
 Source exclusivity is derived from overlapping room/controller/plant relationships and configured policy, not hard-coded upstairs/downstairs or AC/CH identifiers. A local controller active in Bedroom may inhibit a conflicting shared controller that serves Bedroom while leaving an unrelated downstairs controller available.
 
@@ -318,6 +356,8 @@ There is no separate Boost domain. A timed Manual override provides boost-like b
 ## 7. Prediction and solar exposure
 
 Each room predictor estimates future temperature without proposed HVAC intervention and reports confidence/error. Initial implementations may use transparent historical nearest-neighbour or similarly simple models; sophisticated ML is optional.
+
+Indoor prediction remains an input to normal ungated demand and source planning. It does not manufacture a different schedule target and does not override the explicit readiness semantics of an open outdoor gate. Outdoor forecast evaluation for a schedule gate is deterministic policy and is separate from the room-temperature predictor.
 
 Windows are room-owned solar surfaces:
 
@@ -355,8 +395,9 @@ Dry-run mode never sends a Home Assistant service call, creates a synthetic ackn
 - Enforce plant constraints both during planning and at the execution boundary.
 - Use minimum on/off times, hysteresis, and command rate limits.
 - Persist decisions, overrides, and command correlation data.
+- Persist open outdoor-gate timing so restart reconciliation preserves each unexpired minimum-open duration.
 - On startup or HA reconnection, acquire the single-engine lease, read actual states, reconcile manual/conflict status, and only then issue commands.
-- Treat unavailable, stale, or inconsistent HA state conservatively.
+- Treat unavailable, stale, or inconsistent controller and plant state conservatively; outdoor-gate evidence follows its separately specified fail-open rule.
 - Never queue UI control actions while offline or claim they succeeded.
 - Manufacturer/native schedules should be disabled where they would fight automatic ownership, or their interference must be detected as external control.
 
@@ -365,6 +406,7 @@ Dry-run mode never sends a Home Assistant service call, creates a synthetic ackn
 Every automatic decision records:
 
 - room readings, comfort bands, predictions, and confidence;
+- outdoor readings and freshness, forecast crossings, confirmation progress, gate state, opening reason, and minimum-open deadline;
 - demand and affected rooms;
 - eligible and rejected controllers with reasons;
 - plant constraints, reservations, and efficiency/cost estimates;
@@ -410,6 +452,8 @@ All authenticated Home Assistant users may view Aether, while Home Assistant adm
 
 Engine authorization and user authorization are separate grants. The engine grant maintains the background Home Assistant connection independently of browser sessions; each normal user grant proves that user's identity and current role. Logging out or revoking a user session must not disconnect the engine. During first-run setup, one verified Home Assistant administrator authorizes the engine grant and receives a local bootstrap session from the same verified identity, avoiding a second immediate login without making that session the owner of the engine credential. Later sign-ins and engine reconnection use distinct OAuth transactions.
 
+OAuth transactions are single-use and expire ten minutes after creation. The resulting engine grant has no Aether-imposed expiry and remains usable while Home Assistant accepts its refresh token. Aether browser sessions expire after seven days without authenticated activity and always expire thirty days after creation. If authorization fails after a refresh token is issued, or a successful authorization replaces an existing grant, the engine immediately attempts to revoke the obsolete refresh token. Revocation is best-effort: failures produce a sanitized warning and must not expose credentials, discard a successfully stored replacement grant, or interrupt climate orchestration. The MVP does not persist revocation retries. A future hardening step may add an encrypted SQLite-backed revocation queue with delayed retries, startup recovery, and diagnostics after the engine background-task lifecycle exists.
+
 The single Home Assistant instance origin is entered during onboarding and persisted in SQLite. Server-side token bundles are encrypted with versioned authenticated encryption using Node's built-in cryptography and a generated owner-readable key at `/config/aether-auth.key`. Raw session tokens, CSRF tokens, OAuth state, and OAuth browser-binding secrets are never persisted; only their cryptographic hashes are stored. The entire `/config` directory remains the required backup boundary.
 
 `AETHER_PUBLIC_URL` is the canonical externally visible origin used for OAuth callbacks, redirects, cookie security, and origin validation. It must be an absolute HTTP(S) origin without a path, query, or fragment, for example `https://aether.example.com`. The engine must not derive this security-sensitive value from forwarded headers. A reverse proxy may terminate HTTPS and communicate with the container over its private HTTP port.
@@ -417,6 +461,20 @@ The single Home Assistant instance origin is entered during onboarding and persi
 HTTPS is required by default. The exact opt-in `AETHER_ALLOW_INSECURE_HTTP=true` permits an `http://` public URL for local development or a trusted private network. In that mode the session cookie remains `HttpOnly` and `SameSite=Lax` but cannot use `Secure`, and the engine must emit a prominent warning. Insecure mode must never be silently enabled or presented as suitable for internet exposure. Missing, malformed, or insecure public URLs without the opt-in must fail fast once authentication is enabled.
 
 Once authentication is implemented, only a dedicated health endpoint and the endpoints required to complete OAuth are unauthenticated. The installation and control APIs require an authenticated session. The Docker health check must use the dedicated health endpoint rather than an authenticated application endpoint.
+
+The standalone HTTP authentication contract is:
+
+- `GET /api/v1/health` is the unauthenticated Docker and Unraid health endpoint.
+- `GET /api/v1/auth/status` is unauthenticated and reports only whether initial setup is required, the browser is unauthenticated, or the browser has an authenticated session with its display name and authorization flags.
+- `POST /api/v1/auth/engine/setup` is available only before the Home Assistant engine connection is complete. It requires the current initial-setup code, Home Assistant origin, and a safe application-relative return path.
+- `POST /api/v1/auth/login` starts a normal user authorization only after engine setup is complete.
+- `POST /api/v1/auth/engine/reconnect` requires an authenticated Home Assistant administrator session.
+- `GET /api/v1/auth/callback` completes the bound single-use OAuth transaction.
+- `POST /api/v1/auth/logout` requires the current session and its CSRF token.
+
+OAuth-start endpoints accept size-limited JSON and return an authorization URL for the generated web app to navigate to. Every unsafe HTTP method requires an `Origin` header that exactly matches `AETHER_PUBLIC_URL`; authenticated unsafe requests additionally require the readable CSRF cookie value in the request header. Successful callbacks redirect to the transaction's stored safe return path. Failed callbacks clear the browser-binding cookie and redirect to `/auth/error` with only a stable, non-sensitive error code. Authentication responses are not cacheable. Generated frontend assets remain public so the setup and login interface can load, while `GET /api/v1/installation/overview` and other application APIs require an authenticated session.
+
+To prevent first-visitor takeover, an unconfigured engine generates a cryptographically random initial-setup code in process memory and writes it once to the container log. Starting engine setup requires that code, and comparisons must not disclose it through timing or diagnostics. If the process restarts while setup is still incomplete, the previous code becomes invalid and a new code is generated and logged. Once the persisted Home Assistant engine connection is complete, restarts must not generate or log a setup code, and the initial setup endpoint remains disabled. The code is never persisted and no setup code is needed for later engine reconnection.
 
 SQLite with Drizzle stores configuration, schedules, learned data, runtime ownership, and audit history at `/config/aether.sqlite`. Only the engine opens the database. Schema migrations run before the engine begins serving requests, and the complete `/config` directory is the persistent backup boundary.
 
@@ -447,7 +505,7 @@ Delivery proceeds in this order:
 11. add live command execution only after separate approval; and
 12. publish the image and submit the Community Applications template.
 
-Tooling: Vite, ESLint, Prettier, Knip, Vitest, Playwright, and Zod 4. Unit tests must heavily cover demand, schedules, many-to-many topology, shared-controller aggregation, plant constraints, manual reservations, interlocks, source switching, and DST behaviour. A small end-to-end suite covers setup and critical control journeys.
+Tooling: Vite, ESLint, Prettier, Knip, Vitest, Playwright, and Zod 4. Unit tests must heavily cover demand, schedules, outdoor-gate opt-in and hysteresis, forecast and missing-data behaviour, concurrent lower/upper gates, restart persistence, schedule-boundary timing, many-to-many topology, shared-controller aggregation, plant constraints, manual reservations, interlocks, source switching, and DST behaviour. A small end-to-end suite covers setup and critical control journeys.
 
 ## 11. User interface conventions
 
@@ -464,7 +522,7 @@ Offline screens may show clearly labelled cached data with a last-updated time. 
 - Direct control of switches, valves, relays, TRVs, MQTT devices, or vendor-specific services.
 - Independent per-room boiler emission control when only one shared thermostat exists.
 - Exact physical building simulation or guaranteed COP estimates.
-- Turning on equipment in rooms without genuine demand to optimise plant loading.
+- Claiming or creating actual HVAC activity in comfortable rooms solely to optimise plant loading; schedule-period outdoor readiness may still cause Aether to command an automatic controller's mode and exact boundary target while the controller reports `hvac_action: idle`.
 - Automatic resolution of externally created manual plant conflicts.
 - Dedicated `SharedHeatingZone`, `PlantGroup`, or Boost top-level domains.
 

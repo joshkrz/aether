@@ -1,19 +1,24 @@
-import { createServer, type ServerResponse } from 'node:http';
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 
 import { InstallationOverviewResponseSchema } from '@aether/core';
 
+import type { AuthHttpBoundary } from './auth/authHttpHandler.ts';
+import { createAuthNodeAdapter, writeAuthNodeResponse } from './auth/authNodeAdapter.ts';
 import type { InstallationOverviewProvider } from './installationOverviewProvider.ts';
 import { parseRequestPath, serveGeneratedWebApp } from './serveGeneratedWebApp.ts';
 
+const healthPath = '/api/v1/health';
 const installationOverviewPath = '/api/v1/installation/overview';
 
 export interface EngineServerOptions {
+  auth: AuthHttpBoundary;
   getInstallationOverview: InstallationOverviewProvider;
   webRoot?: string;
 }
 
 const writeJson = (response: ServerResponse, statusCode: number, body: unknown): void => {
   response.statusCode = statusCode;
+  response.setHeader('cache-control', 'no-store');
   response.setHeader('content-type', 'application/json; charset=utf-8');
   response.end(JSON.stringify(body));
 };
@@ -22,14 +27,17 @@ const isApiPath = (pathname: string): boolean =>
   pathname === '/api' || pathname.startsWith('/api/');
 
 const handleRequest = async (
-  { getInstallationOverview, webRoot }: EngineServerOptions,
-  requestUrl: string,
-  method: string,
+  { auth, getInstallationOverview, webRoot }: EngineServerOptions,
+  handleAuthRequest: ReturnType<typeof createAuthNodeAdapter>,
+  request: IncomingMessage,
   response: ServerResponse,
 ): Promise<void> => {
+  const requestUrl = request.url ?? '/';
+  const method = request.method ?? 'GET';
   const requestPath = parseRequestPath(requestUrl);
 
   if (!requestPath.success) {
+    request.resume();
     writeJson(response, 400, {
       error: {
         code: 'invalid_request_path',
@@ -40,7 +48,30 @@ const handleRequest = async (
 
   const { pathname } = requestPath;
 
+  if (pathname === healthPath) {
+    request.resume();
+
+    if (method !== 'GET') {
+      response.setHeader('allow', 'GET');
+      writeJson(response, 405, {
+        error: {
+          code: 'method_not_allowed',
+        },
+      });
+      return;
+    }
+
+    writeJson(response, 200, { status: 'ok' });
+    return;
+  }
+
+  if (await handleAuthRequest(request, response, pathname)) {
+    return;
+  }
+
   if (pathname !== installationOverviewPath) {
+    request.resume();
+
     if (isApiPath(pathname) || webRoot === undefined) {
       writeJson(response, 404, {
         error: {
@@ -59,6 +90,8 @@ const handleRequest = async (
     return;
   }
 
+  request.resume();
+
   if (method !== 'GET') {
     response.setHeader('allow', 'GET');
     writeJson(response, 405, {
@@ -66,6 +99,13 @@ const handleRequest = async (
         code: 'method_not_allowed',
       },
     });
+    return;
+  }
+
+  const authentication = await auth.authenticateReadRequest(request.headers.cookie);
+
+  if (authentication.status === 'rejected') {
+    writeAuthNodeResponse(response, authentication.response);
     return;
   }
 
@@ -91,9 +131,11 @@ const handleRequest = async (
   }
 };
 
-export const createEngineServer = (options: EngineServerOptions) =>
-  createServer((request, response) => {
-    void handleRequest(options, request.url ?? '/', request.method ?? 'GET', response).catch(() => {
+export const createEngineServer = (options: EngineServerOptions) => {
+  const handleAuthRequest = createAuthNodeAdapter({ handleRequest: options.auth.handleRequest });
+
+  return createServer((request, response) => {
+    void handleRequest(options, handleAuthRequest, request, response).catch(() => {
       if (response.headersSent) {
         response.destroy();
         return;
@@ -106,3 +148,4 @@ export const createEngineServer = (options: EngineServerOptions) =>
       });
     });
   });
+};

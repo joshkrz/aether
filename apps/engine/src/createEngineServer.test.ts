@@ -3,17 +3,38 @@ import type { AddressInfo } from 'node:net';
 
 import { describe, expect, it } from 'vitest';
 
+import type { AuthHttpBoundary } from './auth/authHttpHandler.ts';
 import { createEngineServer } from './createEngineServer.ts';
 import type { InstallationOverviewProvider } from './installationOverviewProvider.ts';
+
+const authenticatedSession = {
+  createdAtEpochSeconds: 1_000,
+  displayName: 'Aether User',
+  expiresAtEpochSeconds: 2_000,
+  homeAssistantUserId: 'ha-user',
+  isAdmin: false,
+  isOwner: false,
+  lastUsedAtEpochSeconds: 1_000,
+};
+
+const createTestAuth = (overrides: Partial<AuthHttpBoundary> = {}): AuthHttpBoundary => ({
+  authenticateReadRequest: () =>
+    Promise.resolve({ session: authenticatedSession, status: 'authenticated' }),
+  handleRequest: () => Promise.resolve(undefined),
+  ...overrides,
+});
 
 const requestEngine = async (
   getInstallationOverview: InstallationOverviewProvider,
   path = '/api/v1/installation/overview',
   init?: RequestInit,
   webRoot?: string,
+  auth = createTestAuth(),
 ): Promise<Response> => {
   const server = createEngineServer(
-    webRoot === undefined ? { getInstallationOverview } : { getInstallationOverview, webRoot },
+    webRoot === undefined
+      ? { auth, getInstallationOverview }
+      : { auth, getInstallationOverview, webRoot },
   );
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
@@ -37,6 +58,90 @@ const requestEngine = async (
 };
 
 describe('createEngineServer', () => {
+  it('serves liveness health without authentication or application dependencies', async () => {
+    let authWasCalled = false;
+    let providerWasCalled = false;
+    const response = await requestEngine(
+      () => {
+        providerWasCalled = true;
+        return { status: 'not_configured' };
+      },
+      '/api/v1/health',
+      undefined,
+      undefined,
+      createTestAuth({
+        authenticateReadRequest: () => {
+          authWasCalled = true;
+          return Promise.reject(new Error('Health must not authenticate'));
+        },
+        handleRequest: () => {
+          authWasCalled = true;
+          return Promise.reject(new Error('Health must not enter auth routing'));
+        },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    await expect(response.json()).resolves.toEqual({ status: 'ok' });
+    expect(authWasCalled).toBe(false);
+    expect(providerWasCalled).toBe(false);
+  });
+
+  it('delegates authentication API requests through the Node bridge', async () => {
+    const response = await requestEngine(
+      () => ({ status: 'not_configured' }),
+      '/api/v1/auth/status',
+      undefined,
+      undefined,
+      createTestAuth({
+        handleRequest: (request) =>
+          Promise.resolve({
+            body: JSON.stringify({ status: 'setup_required' }),
+            headers: {
+              'cache-control': 'no-store',
+              'content-type': 'application/json; charset=utf-8',
+            },
+            statusCode: request.pathname === '/api/v1/auth/status' ? 200 : 500,
+          }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ status: 'setup_required' });
+  });
+
+  it('rejects installation overview without an authenticated session', async () => {
+    let providerWasCalled = false;
+    const response = await requestEngine(
+      () => {
+        providerWasCalled = true;
+        return { status: 'not_configured' };
+      },
+      '/api/v1/installation/overview',
+      undefined,
+      undefined,
+      createTestAuth({
+        authenticateReadRequest: () =>
+          Promise.resolve({
+            response: {
+              body: JSON.stringify({ error: { code: 'unauthenticated' } }),
+              headers: {
+                'cache-control': 'no-store',
+                'content-type': 'application/json; charset=utf-8',
+              },
+              statusCode: 401,
+            },
+            status: 'rejected',
+          }),
+      }),
+    );
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toEqual({ error: { code: 'unauthenticated' } });
+    expect(providerWasCalled).toBe(false);
+  });
+
   it('returns the not-configured overview through the real HTTP server', async () => {
     const response = await requestEngine(() => ({ status: 'not_configured' }));
 

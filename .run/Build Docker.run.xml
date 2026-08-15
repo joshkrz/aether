@@ -4,6 +4,18 @@
       <settings>
         <option name="imageTag" value="aether:local" />
         <option name="containerName" value="aether-dev" />
+        <option name="envVars">
+          <list>
+            <DockerEnvVarImpl>
+              <option name="name" value="AETHER_PUBLIC_URL" />
+              <option name="value" value="http://127.0.0.1:3001" />
+            </DockerEnvVarImpl>
+            <DockerEnvVarImpl>
+              <option name="name" value="AETHER_ALLOW_INSECURE_HTTP" />
+              <option name="value" value="true" />
+            </DockerEnvVarImpl>
+          </list>
+        </option>
         <option name="portBindings">
           <list>
             <DockerPortBindingImpl>
