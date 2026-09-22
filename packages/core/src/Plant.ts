@@ -4,7 +4,7 @@ import { EnergySourceIdSchema, PlantIdSchema } from './identifiers.js';
 import { PlantConstraintsSchema } from './PlantConstraints.js';
 import { NonBlankStringSchema } from './schemaPrimitives.js';
 
-export const PlantTypeSchema = z.enum(['boiler', 'heat_pump', 'other']);
+export const PlantTypeSchema = z.enum(['boiler', 'heat_pump', 'hvac', 'other']);
 
 export const EfficiencyModelSchema = z.strictObject({
   type: z.literal('fixed'),
@@ -16,9 +16,9 @@ export const PlantSchema = z.strictObject({
   id: PlantIdSchema,
   name: NonBlankStringSchema,
   type: PlantTypeSchema,
-  energySourceId: EnergySourceIdSchema,
-  constraints: PlantConstraintsSchema,
-  efficiencyModel: EfficiencyModelSchema,
+  energySourceId: EnergySourceIdSchema.optional(),
+  constraints: PlantConstraintsSchema.optional(),
+  efficiencyModel: EfficiencyModelSchema.optional(),
 });
 
 export type PlantType = z.infer<typeof PlantTypeSchema>;

@@ -16,14 +16,13 @@ const emptyInstallation = InstallationSchema.parse({
     minimumCommandIntervalSeconds: 60,
     commandAcknowledgementTimeoutSeconds: 30,
   },
+  zones: [],
   rooms: [],
   climateControllers: [],
   plants: [],
   energySources: [],
   schedules: [],
-  roomControllerLinks: [],
-  roomScheduleLinks: [],
-  roomScheduleSelections: [],
+  scheduleSelection: {},
 });
 
 describe('createInstallationOverviewProvider', () => {
@@ -60,6 +59,24 @@ describe('createInstallationOverviewProvider', () => {
         errorCount: 0,
         warningCount: 0,
       },
+    });
+  });
+
+  it('reports no topology warnings for plants awaiting climate entities', () => {
+    const installation = InstallationSchema.parse({
+      ...emptyInstallation,
+      plants: [
+        { id: 'plant-heating', name: 'Central Heating', type: 'boiler' },
+        { id: 'plant-cooling', name: 'HVAC', type: 'hvac' },
+      ],
+    });
+    const getOverview = createInstallationOverviewProvider({
+      loadInstallation: () => installation,
+    });
+
+    expect(getOverview()).toMatchObject({
+      counts: { plants: 2, climateControllers: 0 },
+      topology: { valid: true, errorCount: 0, warningCount: 0 },
     });
   });
 });

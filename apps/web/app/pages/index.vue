@@ -11,10 +11,10 @@ import {
 } from '../queries/authQuery';
 
 const foundations = [
-  'Unified room-to-controller topology',
-  'Plant constraints and energy sources',
-  'Base schedules with temporary overrides',
-  'Strict installation safety envelope',
+  'Zones and rooms with optional membership',
+  'Plants that group climate systems',
+  'Whole-house schedules with main and override slots',
+  'Installation safety settings',
 ] as const;
 
 const apiErrorMessages: Readonly<Record<string, string>> = {
@@ -214,11 +214,17 @@ const submitLogout = (): void => {
       <div class="navbar mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
         <div class="navbar-start gap-3">
           <a href="#top" class="text-xl font-semibold tracking-tight">Aether</a>
-          <span class="badge badge-success badge-sm">Connected</span>
+          <span class="badge badge-success badge-sm">Signed in</span>
         </div>
 
         <nav class="navbar-end gap-1" aria-label="Primary navigation">
           <a class="btn btn-ghost btn-sm hidden sm:inline-flex" href="#overview">Overview</a>
+          <a
+            v-if="authenticatedUser.isAdmin"
+            class="btn btn-ghost btn-sm hidden sm:inline-flex"
+            href="#configuration"
+            >Configuration</a
+          >
           <a class="btn btn-ghost btn-sm hidden sm:inline-flex" href="#foundation">Foundation</a>
           <span class="hidden text-sm md:inline">{{ authenticatedUser.displayName }}</span>
           <span v-if="authenticatedUser.isAdmin" class="badge badge-outline hidden md:inline-flex">
@@ -250,7 +256,7 @@ const submitLogout = (): void => {
             <p
               class="text-primary mb-5 font-mono text-sm font-semibold tracking-[0.16em] uppercase"
             >
-              Hybrid climate orchestrator
+              Whole-house climate scheduling
             </p>
             <h1
               class="text-5xl leading-[0.98] font-semibold tracking-[-0.045em] text-balance sm:text-7xl"
@@ -258,11 +264,14 @@ const submitLogout = (): void => {
               Comfort, coordinated.
             </h1>
             <p class="text-base-content/70 mt-7 max-w-2xl text-lg leading-8 sm:text-xl">
-              Aether brings rooms, climate controllers, shared equipment, energy, and schedules into
-              one explainable Home Assistant control system.
+              Map rooms, zones, and heating and cooling systems, then build whole-house schedules
+              around your Home Assistant climate entities.
             </p>
             <div class="mt-9 flex flex-wrap gap-3">
               <a class="btn btn-primary" href="#overview">View system overview</a>
+              <a v-if="authenticatedUser.isAdmin" class="btn btn-ghost" href="#configuration"
+                >Configure installation</a
+              >
               <a class="btn btn-ghost" href="#foundation">See what is ready</a>
             </div>
           </div>
@@ -271,7 +280,7 @@ const submitLogout = (): void => {
             <div class="flex items-center justify-between gap-4">
               <div>
                 <p class="text-base-content/60 text-sm font-medium">Home Assistant</p>
-                <p class="mt-1 text-lg font-semibold">Connected</p>
+                <p class="mt-1 text-lg font-semibold">Account connected</p>
               </div>
               <span class="status status-success" aria-label="Connected" />
             </div>
@@ -291,6 +300,8 @@ const submitLogout = (): void => {
       </section>
 
       <InstallationOverviewPanel />
+
+      <InstallationConfigurationPanel v-if="authenticatedUser.isAdmin" />
 
       <section id="foundation" class="border-base-300 bg-base-100 border-y">
         <div class="mx-auto grid max-w-7xl gap-10 px-4 py-16 sm:px-6 lg:grid-cols-2 lg:px-8">

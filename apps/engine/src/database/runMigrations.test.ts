@@ -35,7 +35,15 @@ describe('runMigrations', () => {
                 'home_assistant_user',
                 'home_assistant_oauth_credential',
                 'authentication_session',
-                'oauth_transaction'
+                'oauth_transaction',
+                'installation_energy_source',
+                'installation_plant',
+                'installation_zone',
+                'installation_room',
+                'installation_climate_controller',
+                'installation_schedule',
+                'installation_schedule_block',
+                'installation_schedule_selection'
               )
             ORDER BY name
           `,
@@ -47,6 +55,14 @@ describe('runMigrations', () => {
       { name: 'home_assistant_oauth_credential' },
       { name: 'home_assistant_user' },
       { name: 'installation' },
+      { name: 'installation_climate_controller' },
+      { name: 'installation_energy_source' },
+      { name: 'installation_plant' },
+      { name: 'installation_room' },
+      { name: 'installation_schedule' },
+      { name: 'installation_schedule_block' },
+      { name: 'installation_schedule_selection' },
+      { name: 'installation_zone' },
       { name: 'oauth_transaction' },
     ]);
 

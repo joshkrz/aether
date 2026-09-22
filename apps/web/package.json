@@ -4,12 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "nuxt generate",
-    "dev": "nuxt dev",
+    "build": "npm run build --workspace @aether/core && nuxt generate",
+    "dev": "npm run build --workspace @aether/core && nuxt dev",
     "postinstall": "nuxt prepare",
-    "typecheck": "nuxt typecheck"
+    "typecheck": "npm run build --workspace @aether/core && nuxt typecheck"
   },
   "dependencies": {
+    "@aether/core": "0.0.0",
     "@tanstack/vue-query": "5.101.4",
     "axios": "1.19.0",
     "nuxt": "4.5.2",

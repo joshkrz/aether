@@ -18,23 +18,26 @@ Read-only discovery and verification may proceed without approval. Implementatio
 
 ## Source of truth
 
-Read `SPEC.md` before implementation. If code and the spec disagree, surface the discrepancy and resolve it explicitly rather than silently changing the domain model.
+Read `SPEC.md` before implementation. It is the active MVP contract. `docs/ORIGINAL_SPEC.md` preserves the earlier vision verbatim, and `ROADMAP.md` indexes deferred and superseded ideas; neither overrides the active spec. The current code still reflects parts of the earlier design. If code and the active spec disagree, surface the discrepancy and resolve it explicitly rather than silently changing the domain model. Resolve `SPEC.md`'s open decisions before implementing the affected behaviour.
 
 ## Architecture invariants
 
-- Use the unified hierarchy: Installation → Rooms / Climate Controllers / Plants / Energy Sources / Schedules.
-- Room ↔ Climate Controller is many-to-many.
-- Every Climate Controller is backed by one Home Assistant `climate.*` entity and references one Plant.
-- Plants own shared physical constraints and efficiency modelling.
-- Boiler zones are shared Climate Controllers, not a separate top-level domain.
+- Use the MVP hierarchy: Installation → Zones / Rooms / Climate Controllers / Plants / whole-house Schedules.
+- A Room belongs to zero or one Zone; a Zone contains zero or more Rooms. Zones and Rooms may each have multiple Climate Controllers.
+- Every Climate Controller wraps one configured Home Assistant `climate.*` entity, belongs to a Zone or Room, and references one Plant. A `climate.*` entity is configured only once.
+- Plants group Climate Controllers in the MVP. Automatic source selection, efficiency modelling, and advanced plant constraints remain future work; resolve the active spec's shared-plant safety question before affected live control.
+- Each schedule block selects one Climate Controller attached to its Zone or Room and stores only settings supported by that `climate.*` entity.
+- Main and override schedule selections are installation-wide. The override replaces the main schedule in full. MQTT exposes those selections to Home Assistant; it does not carry HVAC equipment commands.
+- An active Room block suppresses every automatically controlled Climate Controller on its Zone. Manual Zone and Room control follows the precedence and expiry rules in `SPEC.md`.
 - Only configured `climate.*` entities may receive HVAC state or target-temperature commands.
-- Prediction and deterministic control policy remain separate.
+- When prediction is introduced, keep it separate from deterministic control policy. The MVP uses each climate entity's own thermostat for temperature regulation.
 - Keep deterministic domain and climate policy in `packages/core`.
 - Keep `packages/core` free of Nuxt, Vue, databases, networks, filesystems, process state, wall-clock access, Home Assistant clients, and other side effects. Pass these values in as plain typed data.
 - Use `apps/engine` as the imperative Node.js shell for scheduling, persistence, Home Assistant communication, reconciliation, command execution, and process lifecycle.
 - Use `apps/web` as the Nuxt shell for configuration, dashboards, diagnostics, and user interaction.
 - Do not duplicate climate policy in either shell. The web app must not control Home Assistant directly; control requests go through the engine boundary.
 - Standalone authentication delegates identity to Home Assistant OAuth; do not add local passwords or expose Home Assistant tokens to browser code.
+- Keep MQTT broker credentials server-side; configure the broker through authenticated Aether application APIs.
 - Keep Home Assistant OAuth tokens server-side and use an opaque, host-only, `HttpOnly`, `SameSite=Lax` Aether session cookie. Use `Secure` whenever the public URL is HTTPS.
 - Treat `AETHER_PUBLIC_URL` as the explicit canonical origin for OAuth callbacks, redirects, cookie security, and origin checks. Do not infer it from forwarded headers.
 - Require HTTPS unless the user explicitly sets `AETHER_ALLOW_INSECURE_HTTP=true`. Insecure mode is limited to local development or trusted private networks, must warn prominently, and must never be silently enabled.

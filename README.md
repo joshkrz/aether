@@ -1,32 +1,40 @@
 # Aether
 
-Aether is a local-first hybrid climate orchestrator for Home Assistant. It coordinates heating and cooling through configured `climate.*` entities while accounting for room demand, shared physical plant, schedules, predictions, energy cost, manual operation, and equipment constraints.
+Aether is a local-first whole-house climate scheduler for Home Assistant. Its MVP will run zone and room schedule blocks through configured `climate.*` entities, with main and override schedules selectable from Home Assistant. The earlier hybrid orchestration ideas remain in the roadmap.
 
-The product and architecture source of truth is [SPEC.md](./SPEC.md).
+The current product and architecture source of truth is [SPEC.md](./SPEC.md). The complete earlier specification is archived at [docs/ORIGINAL_SPEC.md](./docs/ORIGINAL_SPEC.md), and [ROADMAP.md](./ROADMAP.md) indexes its ideas.
 
 ## Status
 
-The core domain foundation and initial Nuxt web shell are implemented in an npm-workspaces monorepo containing:
+The initial domain foundation and Nuxt web shell are implemented in an npm-workspaces monorepo containing:
 
 - a client-rendered Nuxt 4/Vue 3 web application;
 - an always-running Node.js/TypeScript climate engine;
 - a shared deterministic climate-core package.
 
-Production is packaged as one Unraid-oriented container in which the engine serves the generated Nuxt application from the same port as its API. The engine migrates `/config/aether.sqlite` before serving requests, persists Home Assistant OAuth credentials and browser sessions, and protects application APIs. The setup/login UI, persistent engine connection, entity persistence, configuration UI, and live engine-to-web data are not implemented yet.
+Production is packaged as one Unraid-oriented container in which the engine serves the generated Nuxt application from the same port as its API. The engine migrates `/config/aether.sqlite` before serving requests, persists Home Assistant OAuth credentials and browser sessions, and protects application APIs. Initial setup and sign-in screens exist. MVP topology and schedule schemas, pure schedule evaluation, and engine configuration persistence and API are implemented. Administrators can edit installation settings, plants, zones, rooms, and discovered Home Assistant climate entity assignments in the web app. The schedule editor, ongoing Home Assistant state observation, MQTT selection, schedule execution, and live device state remain to be built.
+
+The authenticated `GET /api/v1/installation/configuration` route returns the complete installation, its integer revision, and topology issues. Before the first save it returns `{ "status": "not_configured", "revision": 0 }`. An administrator can send `PUT /api/v1/installation/configuration` with `{ "revision": 0, "installation": { ... } }` to create it, then use the returned revision for each later save. An outdated revision returns HTTP 409. Writes require the canonical `Origin` and `X-Aether-CSRF` header, and accept up to 4 MiB of JSON. Incomplete linked drafts are saved and their topology issues returned; duplicate identifiers are rejected because the database cannot represent them.
 
 ## Core boundary
 
 Home Assistant owns the equipment. Aether may read relevant Home Assistant entities, but all HVAC mode and target-temperature changes must go through configured `climate.*` entities.
 
-The canonical domain relationship is:
+The MVP domain relationship is:
 
 ```text
-Room ⇄ Climate Controller → Plant → Energy Source
+Zone → zero or more Rooms
+Zone or Room → zero or more Climate Controllers → Plant
+Installation → whole-house Schedules → main/override selection
 ```
+
+Each schedule block selects one attached climate entity and its supported settings. Plants group controllers in the MVP; automatic heat-source selection is later work.
 
 ## Documentation
 
-- [SPEC.md](./SPEC.md) — living product and architecture specification
+- [SPEC.md](./SPEC.md) — active MVP product and architecture specification
+- [ROADMAP.md](./ROADMAP.md) — deferred ideas and superseded design decisions
+- [docs/ORIGINAL_SPEC.md](./docs/ORIGINAL_SPEC.md) — verbatim earlier specification
 - [CONTRIBUTING.md](./CONTRIBUTING.md) — development and change conventions
 - [AGENTS.md](./AGENTS.md) — repository guidance for coding agents
 - [DEPENDENCY_EXCEPTIONS.md](./DEPENDENCY_EXCEPTIONS.md) — approved temporary dependency-policy exceptions
@@ -67,7 +75,7 @@ docker run --rm --name aether \
   aether:local
 ```
 
-Aether is then available at `http://localhost:3001`. The engine serves both the generated UI and same-origin `/api/*` routes. Until the setup UI is added, the generated initial setup code appears once in the container output whenever Home Assistant setup is incomplete; restarting the incomplete setup generates a replacement code.
+Aether is then available at `http://localhost:3001`. The engine serves both the generated UI and same-origin `/api/*` routes. The generated initial setup code appears once in the container output whenever Home Assistant setup is incomplete; restarting the incomplete setup generates a replacement code.
 
 The engine applies checked, transactional SQLite migrations before opening the HTTP listener. In the container the database is `/config/aether.sqlite`; local engine development defaults to `./aether.sqlite` and may override it with `AETHER_DATABASE_PATH`.
 

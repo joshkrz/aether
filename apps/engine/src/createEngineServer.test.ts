@@ -1,10 +1,12 @@
 import { once } from 'node:events';
 import type { AddressInfo } from 'node:net';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+import { InstallationSchema } from '@aether/core';
 
 import type { AuthHttpBoundary } from './auth/authHttpHandler.ts';
-import { createEngineServer } from './createEngineServer.ts';
+import { createEngineServer, type EngineServerOptions } from './createEngineServer.ts';
 import type { InstallationOverviewProvider } from './installationOverviewProvider.ts';
 
 const authenticatedSession = {
@@ -20,6 +22,8 @@ const authenticatedSession = {
 const createTestAuth = (overrides: Partial<AuthHttpBoundary> = {}): AuthHttpBoundary => ({
   authenticateReadRequest: () =>
     Promise.resolve({ session: authenticatedSession, status: 'authenticated' }),
+  authenticateMutationRequest: () =>
+    Promise.resolve({ session: authenticatedSession, status: 'authenticated' }),
   handleRequest: () => Promise.resolve(undefined),
   ...overrides,
 });
@@ -30,11 +34,17 @@ const requestEngine = async (
   init?: RequestInit,
   webRoot?: string,
   auth = createTestAuth(),
+  installationRepository: EngineServerOptions['installationRepository'] = {
+    loadInstallationWithRevision: () => undefined,
+    saveInstallation: () => ({ status: 'conflict' }),
+  },
+  getClimateEntities: EngineServerOptions['getClimateEntities'] = () =>
+    Promise.resolve({ entities: [] }),
 ): Promise<Response> => {
   const server = createEngineServer(
     webRoot === undefined
-      ? { auth, getInstallationOverview }
-      : { auth, getInstallationOverview, webRoot },
+      ? { auth, getClimateEntities, getInstallationOverview, installationRepository }
+      : { auth, getClimateEntities, getInstallationOverview, installationRepository, webRoot },
   );
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
@@ -58,6 +68,64 @@ const requestEngine = async (
 };
 
 describe('createEngineServer', () => {
+  it('limits climate discovery to authenticated administrators and discloses no credentials', async () => {
+    const path = '/api/v1/home-assistant/climate-entities';
+    const getClimateEntities = vi.fn(() => Promise.resolve({ entities: [] }));
+    const unauthenticated = await requestEngine(
+      () => ({ status: 'not_configured' }),
+      path,
+      undefined,
+      undefined,
+      createTestAuth({
+        authenticateReadRequest: () =>
+          Promise.resolve({
+            status: 'rejected',
+            response: {
+              statusCode: 401,
+              headers: { 'content-type': 'application/json; charset=utf-8' },
+              body: JSON.stringify({ error: { code: 'unauthenticated' } }),
+            },
+          }),
+      }),
+      undefined,
+      getClimateEntities,
+    );
+    expect(unauthenticated.status).toBe(401);
+    expect(getClimateEntities).not.toHaveBeenCalled();
+
+    const guest = await requestEngine(
+      () => ({ status: 'not_configured' }),
+      path,
+      undefined,
+      undefined,
+      createTestAuth(),
+      undefined,
+      getClimateEntities,
+    );
+    expect(guest.status).toBe(403);
+    expect(getClimateEntities).not.toHaveBeenCalled();
+
+    const adminAuth = createTestAuth({
+      authenticateReadRequest: () =>
+        Promise.resolve({
+          status: 'authenticated',
+          session: { ...authenticatedSession, isAdmin: true },
+        }),
+    });
+    const admin = await requestEngine(
+      () => ({ status: 'not_configured' }),
+      path,
+      undefined,
+      undefined,
+      adminAuth,
+      undefined,
+      getClimateEntities,
+    );
+    expect(admin.status).toBe(200);
+    await expect(admin.json()).resolves.toEqual({ entities: [] });
+    expect(getClimateEntities).toHaveBeenCalledTimes(1);
+  });
+
   it('serves liveness health without authentication or application dependencies', async () => {
     let authWasCalled = false;
     let providerWasCalled = false;
@@ -250,6 +318,83 @@ describe('createEngineServer', () => {
       error: {
         code: 'method_not_allowed',
       },
+    });
+  });
+
+  it('routes whole-installation GET and PUT through the HTTP server', async () => {
+    const installation = InstallationSchema.parse({
+      id: 'installation-home',
+      name: 'Home',
+      timeZone: 'Europe/London',
+      displayTemperatureUnit: 'celsius',
+      safety: {
+        minimumTargetTemperatureCelsius: 5,
+        maximumTargetTemperatureCelsius: 35,
+        maximumTelemetryAgeSeconds: 300,
+        minimumCommandIntervalSeconds: 60,
+        commandAcknowledgementTimeoutSeconds: 30,
+      },
+      zones: [],
+      rooms: [],
+      climateControllers: [],
+      plants: [],
+      energySources: [],
+      schedules: [],
+      scheduleSelection: {},
+    });
+    const saveInstallation = vi.fn(() => ({
+      status: 'saved' as const,
+      installation,
+      revision: 1,
+    }));
+    const repository = {
+      loadInstallationWithRevision: () => undefined,
+      saveInstallation,
+    };
+    const adminAuth = createTestAuth({
+      authenticateMutationRequest: () =>
+        Promise.resolve({
+          status: 'authenticated',
+          session: { ...authenticatedSession, isAdmin: true },
+        }),
+    });
+    const path = '/api/v1/installation/configuration';
+    const getResponse = await requestEngine(
+      () => ({ status: 'not_configured' }),
+      path,
+      undefined,
+      undefined,
+      adminAuth,
+      repository,
+    );
+
+    expect(getResponse.status).toBe(200);
+    await expect(getResponse.json()).resolves.toEqual({ status: 'not_configured', revision: 0 });
+
+    const putResponse = await requestEngine(
+      () => ({ status: 'not_configured' }),
+      path,
+      {
+        method: 'PUT',
+        headers: {
+          'content-type': 'application/json',
+          origin: 'https://aether.example.com',
+          'x-aether-csrf': 'csrf',
+        },
+        body: JSON.stringify({ revision: 0, installation }),
+      },
+      undefined,
+      adminAuth,
+      repository,
+    );
+
+    expect(putResponse.status).toBe(200);
+    expect(saveInstallation).toHaveBeenCalledWith(installation, 0);
+    await expect(putResponse.json()).resolves.toEqual({
+      status: 'configured',
+      revision: 1,
+      installation,
+      topology: { valid: true, issues: [] },
     });
   });
 });

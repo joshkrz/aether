@@ -58,8 +58,19 @@ const installationRepository = createInstallationRepository(database.query);
 const getInstallationOverview = createInstallationOverviewProvider(installationRepository);
 const server = createEngineServer(
   webRoot === undefined
-    ? { auth: authRuntime.boundary, getInstallationOverview }
-    : { auth: authRuntime.boundary, getInstallationOverview, webRoot },
+    ? {
+        auth: authRuntime.boundary,
+        getClimateEntities: authRuntime.getClimateEntities,
+        getInstallationOverview,
+        installationRepository,
+      }
+    : {
+        auth: authRuntime.boundary,
+        getClimateEntities: authRuntime.getClimateEntities,
+        getInstallationOverview,
+        installationRepository,
+        webRoot,
+      },
 );
 
 server.listen(port, host, () => {

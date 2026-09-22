@@ -6,11 +6,10 @@ import { InstallationIdSchema } from './identifiers.js';
 import { InstallationSafetySettingsSchema } from './InstallationSafetySettings.js';
 import { PlantSchema } from './Plant.js';
 import { RoomSchema } from './Room.js';
-import { RoomControllerLinkSchema } from './RoomControllerLink.js';
-import { RoomScheduleLinkSchema } from './RoomScheduleLink.js';
-import { RoomScheduleSelectionSchema } from './RoomScheduleSelection.js';
 import { ScheduleSchema } from './Schedule.js';
+import { ScheduleSelectionSchema } from './ScheduleSelection.js';
 import { NonBlankStringSchema } from './schemaPrimitives.js';
+import { ZoneSchema } from './Zone.js';
 
 const isSupportedIanaTimeZone = (timeZone: string): boolean => {
   try {
@@ -34,14 +33,13 @@ export const InstallationSchema = z.strictObject({
   timeZone: TimeZoneSchema,
   displayTemperatureUnit: DisplayTemperatureUnitSchema,
   safety: InstallationSafetySettingsSchema,
+  zones: z.array(ZoneSchema),
   rooms: z.array(RoomSchema),
   climateControllers: z.array(ClimateControllerSchema),
   plants: z.array(PlantSchema),
   energySources: z.array(EnergySourceSchema),
   schedules: z.array(ScheduleSchema),
-  roomControllerLinks: z.array(RoomControllerLinkSchema),
-  roomScheduleLinks: z.array(RoomScheduleLinkSchema),
-  roomScheduleSelections: z.array(RoomScheduleSelectionSchema),
+  scheduleSelection: ScheduleSelectionSchema,
 });
 
 export type TimeZone = z.infer<typeof TimeZoneSchema>;

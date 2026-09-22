@@ -6,7 +6,7 @@ const validController = {
   id: 'controller-bedroom-ac',
   name: 'Bedroom AC',
   entityId: 'climate.bedroom_ac',
-  scope: 'local',
+  location: { type: 'room', roomId: 'room-bedroom' },
   plantId: 'plant-heat-pump',
   capabilities: { heat: true, cool: true, off: true },
   controlProfile: { heatingMode: 'heat', coolingMode: 'cool', offMode: 'off' },
@@ -16,6 +16,27 @@ const validController = {
 describe('ClimateControllerSchema', () => {
   it('accepts a climate-backed controller', () => {
     expect(ClimateControllerSchema.safeParse(validController).success).toBe(true);
+  });
+
+  it('accepts a controller located on a zone', () => {
+    expect(
+      ClimateControllerSchema.safeParse({
+        ...validController,
+        location: { type: 'zone', zoneId: 'zone-upstairs' },
+      }).success,
+    ).toBe(true);
+  });
+
+  it('requires exactly one room or zone location', () => {
+    expect(
+      ClimateControllerSchema.safeParse({ ...validController, location: undefined }).success,
+    ).toBe(false);
+    expect(
+      ClimateControllerSchema.safeParse({
+        ...validController,
+        location: { type: 'room', roomId: 'room-bedroom', zoneId: 'zone-upstairs' },
+      }).success,
+    ).toBe(false);
   });
 
   it('rejects a non-climate Home Assistant entity', () => {

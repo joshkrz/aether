@@ -73,6 +73,7 @@ export type AuthHttpBoundary = {
   authenticateReadRequest: (
     cookieHeader: string | undefined,
   ) => Promise<AuthenticatedRequestResult>;
+  authenticateMutationRequest: (request: AuthHttpRequest) => Promise<AuthenticatedRequestResult>;
   handleRequest: AuthHttpHandler;
 };
 
@@ -350,6 +351,16 @@ export const createAuthHttpBoundary = (options: AuthHttpHandlerOptions): AuthHtt
     return authentication.status === 'authenticated'
       ? authentication
       : { response: rejectUnauthenticated(true), status: 'rejected' };
+  };
+
+  const authenticateMutationRequest = async (
+    request: AuthHttpRequest,
+  ): Promise<AuthenticatedRequestResult> => {
+    const originRejection = requireOrigin(request);
+
+    return originRejection === undefined
+      ? authenticateUnsafeRequest(request)
+      : { response: originRejection, status: 'rejected' };
   };
 
   const beginAuthorization = (
@@ -641,5 +652,5 @@ export const createAuthHttpBoundary = (options: AuthHttpHandlerOptions): AuthHtt
     }
   };
 
-  return { authenticateReadRequest, handleRequest };
+  return { authenticateReadRequest, authenticateMutationRequest, handleRequest };
 };

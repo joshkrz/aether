@@ -16,14 +16,16 @@ const emptyDays = {
 const room = {
   id: 'room-bedroom',
   name: 'Bedroom',
-  temperatureEntityId: 'sensor.bedroom_temperature',
+  zoneId: 'zone-upstairs',
 };
+
+const zone = { id: 'zone-upstairs', name: 'Upstairs' };
 
 const controller = {
   id: 'controller-bedroom-ac',
   name: 'Bedroom AC',
   entityId: 'climate.bedroom_ac',
-  scope: 'local',
+  location: { type: 'room', roomId: room.id },
   plantId: 'plant-heat-pump',
   capabilities: { heat: true, cool: true, off: true },
   controlProfile: { heatingMode: 'heat', coolingMode: 'cool', offMode: 'off' },
@@ -52,10 +54,19 @@ const energySource = {
   type: 'electricity',
 };
 
+const block = {
+  id: 'block-bedroom-morning',
+  location: { type: 'room', roomId: room.id },
+  controllerId: controller.id,
+  startMinute: 420,
+  endMinute: 540,
+  settings: { hvacMode: 'cool', targetTemperatureCelsius: 21 },
+};
+
 const schedule = {
-  id: 'schedule-bedroom-home',
-  name: 'Bedroom home',
-  days: emptyDays,
+  id: 'schedule-home',
+  name: 'Home',
+  days: { ...emptyDays, monday: [block] },
 };
 
 const validInstallation = {
@@ -70,29 +81,13 @@ const validInstallation = {
     minimumCommandIntervalSeconds: 30,
     commandAcknowledgementTimeoutSeconds: 15,
   },
+  zones: [zone],
   rooms: [room],
   climateControllers: [controller],
   plants: [plant],
   energySources: [energySource],
   schedules: [schedule],
-  roomControllerLinks: [
-    {
-      roomId: room.id,
-      controllerId: controller.id,
-    },
-  ],
-  roomScheduleLinks: [
-    {
-      roomId: room.id,
-      scheduleId: schedule.id,
-    },
-  ],
-  roomScheduleSelections: [
-    {
-      roomId: room.id,
-      baseScheduleId: schedule.id,
-    },
-  ],
+  scheduleSelection: { mainScheduleId: schedule.id },
 };
 
 const parseInstallation = (overrides: Record<string, unknown> = {}) =>
@@ -102,7 +97,7 @@ const issueCodes = (overrides: Record<string, unknown>) =>
   validateInstallationTopology(parseInstallation(overrides)).issues.map(({ code }) => code);
 
 describe('validateInstallationTopology', () => {
-  it('accepts a complete topology', () => {
+  it('accepts a complete topology with a whole-house schedule', () => {
     expect(validateInstallationTopology(parseInstallation())).toEqual({ valid: true, issues: [] });
   });
 
@@ -110,17 +105,44 @@ describe('validateInstallationTopology', () => {
     expect(issueCodes({ rooms: [room, { ...room, name: 'Duplicate bedroom' }] })).toContain(
       'duplicate_entity_id',
     );
+    expect(issueCodes({ zones: [zone, { ...zone, name: 'Duplicate upstairs' }] })).toContain(
+      'duplicate_entity_id',
+    );
+    expect(
+      issueCodes({ schedules: [schedule, { ...schedule, name: 'Duplicate schedule' }] }),
+    ).toContain('duplicate_entity_id');
   });
 
-  it('rejects duplicate Home Assistant climate entities', () => {
+  it('rejects duplicate Home Assistant climate entities across room and zone attachments', () => {
     expect(
       issueCodes({
-        climateControllers: [controller, { ...controller, id: 'controller-bedroom-ac-copy' }],
+        climateControllers: [
+          controller,
+          {
+            ...controller,
+            id: 'controller-bedroom-ac-copy',
+            location: { type: 'zone', zoneId: zone.id },
+          },
+        ],
       }),
     ).toContain('duplicate_controller_entity_id');
   });
 
-  it('rejects missing plant and energy-source references', () => {
+  it('accepts a standalone room alongside an empty zone', () => {
+    const result = validateInstallationTopology(
+      parseInstallation({
+        rooms: [{ id: 'room-office', name: 'Office' }],
+        climateControllers: [],
+        plants: [],
+        schedules: [],
+        scheduleSelection: {},
+      }),
+    );
+
+    expect(result).toEqual({ valid: true, issues: [] });
+  });
+
+  it('rejects missing plant and optional energy-source references', () => {
     expect(
       issueCodes({
         climateControllers: [{ ...controller, plantId: 'plant-missing' }],
@@ -131,117 +153,140 @@ describe('validateInstallationTopology', () => {
     );
   });
 
-  it('rejects dangling and duplicate room-controller links', () => {
+  it('rejects dangling room and zone references', () => {
     expect(
       issueCodes({
-        roomControllerLinks: [
-          { roomId: 'room-missing', controllerId: 'controller-missing' },
-          { roomId: room.id, controllerId: controller.id },
-          { roomId: room.id, controllerId: controller.id },
+        rooms: [{ ...room, zoneId: 'zone-missing' }],
+        climateControllers: [{ ...controller, location: { type: 'room', roomId: 'room-missing' } }],
+      }),
+    ).toEqual(expect.arrayContaining(['missing_room_reference', 'missing_zone_reference']));
+
+    expect(
+      issueCodes({
+        climateControllers: [{ ...controller, location: { type: 'zone', zoneId: 'zone-missing' } }],
+      }),
+    ).toContain('missing_zone_reference');
+  });
+
+  it('accepts multiple controllers on a room or zone under the same plant', () => {
+    const result = validateInstallationTopology(
+      parseInstallation({
+        climateControllers: [
+          controller,
+          { ...controller, id: 'controller-bedroom-heat', entityId: 'climate.bedroom_heat' },
+          {
+            ...controller,
+            id: 'controller-upstairs-heat',
+            entityId: 'climate.upstairs_heat',
+            location: { type: 'zone', zoneId: zone.id },
+          },
+        ],
+      }),
+    );
+
+    expect(result).toEqual({ valid: true, issues: [] });
+  });
+
+  it('rejects schedule blocks with a missing room, zone, or controller', () => {
+    expect(
+      issueCodes({
+        schedules: [
+          {
+            ...schedule,
+            days: {
+              ...emptyDays,
+              monday: [
+                {
+                  ...block,
+                  id: 'block-missing-room',
+                  location: { type: 'room', roomId: 'room-missing' },
+                },
+                {
+                  ...block,
+                  id: 'block-missing-zone',
+                  location: { type: 'zone', zoneId: 'zone-missing' },
+                  startMinute: 540,
+                  endMinute: 600,
+                },
+                {
+                  ...block,
+                  id: 'block-missing-controller',
+                  controllerId: 'controller-missing',
+                  startMinute: 600,
+                  endMinute: 660,
+                },
+              ],
+            },
+          },
         ],
       }),
     ).toEqual(
       expect.arrayContaining([
         'missing_room_reference',
+        'missing_zone_reference',
         'missing_controller_reference',
-        'duplicate_room_controller_link',
       ]),
     );
   });
 
-  it('rejects dangling and duplicate room-schedule links', () => {
+  it('rejects a block selecting a controller attached to another location', () => {
     expect(
       issueCodes({
-        roomScheduleLinks: [
-          { roomId: 'room-missing', scheduleId: 'schedule-missing' },
-          { roomId: room.id, scheduleId: schedule.id },
-          { roomId: room.id, scheduleId: schedule.id },
+        schedules: [
+          {
+            ...schedule,
+            days: {
+              ...emptyDays,
+              monday: [{ ...block, location: { type: 'zone', zoneId: zone.id } }],
+            },
+          },
         ],
       }),
-    ).toEqual(
-      expect.arrayContaining([
-        'missing_room_reference',
-        'missing_schedule_reference',
-        'duplicate_room_schedule_link',
-      ]),
+    ).toContain('schedule_block_location_mismatch');
+  });
+
+  it('rejects repeated block IDs within one weekly schedule', () => {
+    expect(
+      issueCodes({
+        schedules: [{ ...schedule, days: { ...emptyDays, monday: [block], tuesday: [block] } }],
+      }),
+    ).toContain('duplicate_schedule_block_id');
+  });
+
+  it('rejects a missing selected schedule', () => {
+    expect(issueCodes({ scheduleSelection: { mainScheduleId: 'schedule-missing' } })).toContain(
+      'missing_schedule_reference',
+    );
+    expect(issueCodes({ scheduleSelection: { overrideScheduleId: 'schedule-missing' } })).toContain(
+      'missing_schedule_reference',
     );
   });
 
-  it('rejects duplicate room selection records', () => {
+  it('rejects controller modes unsupported by an optional plant constraint', () => {
     expect(
       issueCodes({
-        roomScheduleSelections: [
-          { roomId: room.id, baseScheduleId: schedule.id },
-          { roomId: room.id, overrideScheduleId: schedule.id },
-        ],
-      }),
-    ).toContain('duplicate_room_schedule_selection');
-  });
-
-  it('rejects missing or unassigned selected schedules', () => {
-    expect(
-      issueCodes({
-        roomScheduleSelections: [
-          {
-            roomId: room.id,
-            baseScheduleId: 'schedule-missing',
-            overrideScheduleId: schedule.id,
-          },
-        ],
-        roomScheduleLinks: [],
-      }),
-    ).toEqual(
-      expect.arrayContaining(['missing_schedule_reference', 'unassigned_selected_schedule']),
-    );
-  });
-
-  it('rejects controller modes unsupported by the referenced plant', () => {
-    expect(
-      issueCodes({
-        plants: [
-          {
-            ...plant,
-            constraints: { ...plant.constraints, supportedModes: ['heat'] },
-          },
-        ],
+        plants: [{ ...plant, constraints: { ...plant.constraints, supportedModes: ['heat'] } }],
       }),
     ).toContain('unsupported_controller_mode');
   });
 
-  it('warns about incomplete but safe controller and plant setup', () => {
+  it('accepts plants before controllers are assigned', () => {
     const result = validateInstallationTopology(
       parseInstallation({
-        roomControllerLinks: [],
+        plants: [plant, { ...plant, id: 'plant-boiler', name: 'Boiler', type: 'boiler' }],
         climateControllers: [],
+        schedules: [],
+        scheduleSelection: {},
       }),
     );
 
-    expect(result.valid).toBe(true);
-    expect(result.issues).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ severity: 'warning', code: 'unused_plant' }),
-      ]),
-    );
-
-    const unlinkedControllerResult = validateInstallationTopology(
-      parseInstallation({ roomControllerLinks: [] }),
-    );
-    expect(unlinkedControllerResult.valid).toBe(true);
-    expect(unlinkedControllerResult.issues).toContainEqual(
-      expect.objectContaining({ severity: 'warning', code: 'unlinked_controller' }),
-    );
+    expect(result).toEqual({ valid: true, issues: [] });
   });
 
-  it('warns when base and override selections are identical', () => {
+  it('warns when main and override select the same schedule', () => {
     const result = validateInstallationTopology(
       parseInstallation({
-        roomScheduleSelections: [
-          {
-            roomId: room.id,
-            baseScheduleId: schedule.id,
-            overrideScheduleId: schedule.id,
-          },
-        ],
+        scheduleSelection: { mainScheduleId: schedule.id, overrideScheduleId: schedule.id },
       }),
     );
 
@@ -251,13 +296,13 @@ describe('validateInstallationTopology', () => {
     );
   });
 
-  it('allows rooms without controllers or selected schedules', () => {
+  it('allows rooms without controllers and unselected schedules', () => {
     const result = validateInstallationTopology(
       parseInstallation({
         climateControllers: [],
         plants: [],
-        roomControllerLinks: [],
-        roomScheduleSelections: [],
+        schedules: [{ ...schedule, days: emptyDays }],
+        scheduleSelection: {},
       }),
     );
 

@@ -8,6 +8,10 @@ import { createAuthSessionService } from './authSessionService.ts';
 import { createHomeAssistantOAuthClient } from './homeAssistantOAuthClient.ts';
 import { createInitialSetupCode } from './initialSetupCode.ts';
 import { createOAuthFlowService } from './oauthFlowService.ts';
+import {
+  createClimateEntityDiscovery,
+  type ClimateEntityDiscovery,
+} from '../homeAssistantClimateDiscovery.ts';
 
 export type AuthRuntimeWarning =
   | {
@@ -36,6 +40,7 @@ type AuthRuntimeOptions = {
 
 export type AuthRuntime = {
   boundary: AuthHttpBoundary;
+  getClimateEntities: ClimateEntityDiscovery;
 };
 
 export const createAuthRuntime = (options: AuthRuntimeOptions): AuthRuntime => {
@@ -75,5 +80,6 @@ export const createAuthRuntime = (options: AuthRuntimeOptions): AuthRuntime => {
       onWarning: (warning) => options.onWarning({ ...warning, source: 'http' }),
       publicOrigin: options.config.publicOrigin,
     }),
+    getClimateEntities: createClimateEntityDiscovery({ authRepository, homeAssistantClient }),
   };
 };

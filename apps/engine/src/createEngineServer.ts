@@ -3,16 +3,36 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { InstallationOverviewResponseSchema } from '@aether/core';
 
 import type { AuthHttpBoundary } from './auth/authHttpHandler.ts';
-import { createAuthNodeAdapter, writeAuthNodeResponse } from './auth/authNodeAdapter.ts';
+import {
+  createAuthNodeAdapter,
+  readAuthNodeRequestBody,
+  writeAuthNodeResponse,
+} from './auth/authNodeAdapter.ts';
+import type { InstallationRepository } from './database/installationRepository.ts';
+import {
+  ClimateDiscoveryError,
+  type ClimateEntityDiscovery,
+} from './homeAssistantClimateDiscovery.ts';
+import {
+  createInstallationConfigurationHandler,
+  maximumConfigurationJsonBodyBytes,
+} from './installationConfigurationHandler.ts';
 import type { InstallationOverviewProvider } from './installationOverviewProvider.ts';
 import { parseRequestPath, serveGeneratedWebApp } from './serveGeneratedWebApp.ts';
 
 const healthPath = '/api/v1/health';
 const installationOverviewPath = '/api/v1/installation/overview';
+const installationConfigurationPath = '/api/v1/installation/configuration';
+const climateEntitiesPath = '/api/v1/home-assistant/climate-entities';
 
 export interface EngineServerOptions {
   auth: AuthHttpBoundary;
+  getClimateEntities: ClimateEntityDiscovery;
   getInstallationOverview: InstallationOverviewProvider;
+  installationRepository: Pick<
+    InstallationRepository,
+    'loadInstallationWithRevision' | 'saveInstallation'
+  >;
   webRoot?: string;
 }
 
@@ -27,7 +47,13 @@ const isApiPath = (pathname: string): boolean =>
   pathname === '/api' || pathname.startsWith('/api/');
 
 const handleRequest = async (
-  { auth, getInstallationOverview, webRoot }: EngineServerOptions,
+  {
+    auth,
+    getClimateEntities,
+    getInstallationOverview,
+    installationRepository,
+    webRoot,
+  }: EngineServerOptions,
   handleAuthRequest: ReturnType<typeof createAuthNodeAdapter>,
   request: IncomingMessage,
   response: ServerResponse,
@@ -66,6 +92,76 @@ const handleRequest = async (
   }
 
   if (await handleAuthRequest(request, response, pathname)) {
+    return;
+  }
+
+  if (pathname === climateEntitiesPath) {
+    request.resume();
+
+    if (method !== 'GET') {
+      response.setHeader('allow', 'GET');
+      writeJson(response, 405, { error: { code: 'method_not_allowed' } });
+      return;
+    }
+
+    const authentication = await auth.authenticateReadRequest(request.headers.cookie);
+    if (authentication.status === 'rejected') {
+      writeAuthNodeResponse(response, authentication.response);
+      return;
+    }
+    if (!authentication.session.isAdmin) {
+      writeJson(response, 403, { error: { code: 'administrator_required' } });
+      return;
+    }
+
+    try {
+      writeJson(response, 200, await getClimateEntities());
+    } catch (error) {
+      writeJson(
+        response,
+        error instanceof ClimateDiscoveryError && error.code === 'not_connected' ? 409 : 502,
+        {
+          error: {
+            code: error instanceof ClimateDiscoveryError ? error.code : 'unavailable',
+          },
+        },
+      );
+    }
+    return;
+  }
+
+  if (pathname === installationConfigurationPath) {
+    const header = (value: string | string[] | undefined): string | undefined =>
+      typeof value === 'string' ? value : undefined;
+    const body =
+      method === 'PUT'
+        ? await readAuthNodeRequestBody(request, maximumConfigurationJsonBodyBytes)
+        : undefined;
+
+    if (method !== 'PUT') {
+      request.resume();
+    }
+
+    const handleConfiguration = createInstallationConfigurationHandler(
+      auth,
+      installationRepository,
+    );
+    const contentType = header(request.headers['content-type']);
+    const cookie = header(request.headers.cookie);
+    const csrfToken = header(request.headers['x-aether-csrf']);
+    const origin = header(request.headers.origin);
+    const result = await handleConfiguration({
+      pathname,
+      method,
+      headers: {
+        ...(contentType === undefined ? {} : { contentType }),
+        ...(cookie === undefined ? {} : { cookie }),
+        ...(csrfToken === undefined ? {} : { csrfToken }),
+        ...(origin === undefined ? {} : { origin }),
+      },
+      ...(body === undefined ? {} : { body }),
+    });
+    writeAuthNodeResponse(response, result);
     return;
   }
 

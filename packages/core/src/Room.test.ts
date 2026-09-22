@@ -27,6 +27,14 @@ describe('RoomSchema', () => {
     expect(RoomSchema.safeParse(validRoom).success).toBe(true);
   });
 
+  it('accepts rooms with or without a zone and without a separate temperature sensor', () => {
+    expect(RoomSchema.safeParse({ id: 'room-office', name: 'Office' }).success).toBe(true);
+    expect(
+      RoomSchema.safeParse({ id: 'room-bedroom', name: 'Bedroom', zoneId: 'zone-upstairs' })
+        .success,
+    ).toBe(true);
+  });
+
   it('does not allow a parallel controller ID collection', () => {
     expect(
       RoomSchema.safeParse({ ...validRoom, controllerIds: ['controller-bedroom-ac'] }).success,

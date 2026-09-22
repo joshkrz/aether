@@ -1,10 +1,15 @@
-import { queryOptions } from '@tanstack/vue-query';
+import { mutationOptions, queryOptions } from '@tanstack/vue-query';
 
-import { getInstallationOverview } from '../api/installationApi';
+import {
+  getInstallationConfiguration,
+  getInstallationOverview,
+  saveInstallationConfiguration,
+} from '../api/installationApi';
 
 export const installationQueryKeys = {
   all: ['installation'] as const,
   overview: () => [...installationQueryKeys.all, 'overview'] as const,
+  configuration: () => [...installationQueryKeys.all, 'configuration'] as const,
 };
 
 export const installationOverviewQueryOptions = () =>
@@ -13,4 +18,19 @@ export const installationOverviewQueryOptions = () =>
     queryFn: getInstallationOverview,
     retry: 1,
     staleTime: 30_000,
+  });
+
+export const installationConfigurationQueryOptions = () =>
+  queryOptions({
+    queryKey: installationQueryKeys.configuration(),
+    queryFn: getInstallationConfiguration,
+    retry: 1,
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
+  });
+
+export const saveInstallationMutationOptions = () =>
+  mutationOptions({
+    mutationKey: [...installationQueryKeys.all, 'save-configuration'] as const,
+    mutationFn: saveInstallationConfiguration,
   });

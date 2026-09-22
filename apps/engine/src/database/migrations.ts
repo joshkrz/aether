@@ -150,4 +150,120 @@ export const databaseMigrations = [
         ON oauth_transaction(expires_at_epoch_seconds);
     `,
   },
+  {
+    id: '0003InstallationConfiguration',
+    sql: `
+      CREATE TABLE installation_energy_source (
+        id TEXT PRIMARY KEY NOT NULL CHECK (length(trim(id)) > 0),
+        installation_singleton_key INTEGER NOT NULL DEFAULT 1 CHECK (installation_singleton_key = 1),
+        position INTEGER NOT NULL UNIQUE CHECK (position >= 0),
+        name TEXT NOT NULL CHECK (length(trim(name)) > 0),
+        type TEXT NOT NULL CHECK (type IN ('electricity', 'gas', 'other')),
+        tariff_entity_id TEXT,
+        emissions_entity_id TEXT,
+        fixed_unit_cost REAL CHECK (fixed_unit_cost IS NULL OR fixed_unit_cost >= 0),
+        FOREIGN KEY (installation_singleton_key) REFERENCES installation(singleton_key) ON DELETE CASCADE
+      ) STRICT;
+
+      CREATE TABLE installation_plant (
+        id TEXT PRIMARY KEY NOT NULL CHECK (length(trim(id)) > 0),
+        installation_singleton_key INTEGER NOT NULL DEFAULT 1 CHECK (installation_singleton_key = 1),
+        position INTEGER NOT NULL UNIQUE CHECK (position >= 0),
+        name TEXT NOT NULL CHECK (length(trim(name)) > 0),
+        type TEXT NOT NULL CHECK (type IN ('boiler', 'heat_pump', 'hvac', 'other')),
+        energy_source_id TEXT,
+        constraints_json TEXT CHECK (constraints_json IS NULL OR json_valid(constraints_json)),
+        efficiency_model_json TEXT CHECK (efficiency_model_json IS NULL OR json_valid(efficiency_model_json)),
+        FOREIGN KEY (installation_singleton_key) REFERENCES installation(singleton_key) ON DELETE CASCADE
+      ) STRICT;
+
+      CREATE TABLE installation_zone (
+        id TEXT PRIMARY KEY NOT NULL CHECK (length(trim(id)) > 0),
+        installation_singleton_key INTEGER NOT NULL DEFAULT 1 CHECK (installation_singleton_key = 1),
+        position INTEGER NOT NULL UNIQUE CHECK (position >= 0),
+        name TEXT NOT NULL CHECK (length(trim(name)) > 0),
+        FOREIGN KEY (installation_singleton_key) REFERENCES installation(singleton_key) ON DELETE CASCADE
+      ) STRICT;
+
+      CREATE TABLE installation_room (
+        id TEXT PRIMARY KEY NOT NULL CHECK (length(trim(id)) > 0),
+        installation_singleton_key INTEGER NOT NULL DEFAULT 1 CHECK (installation_singleton_key = 1),
+        position INTEGER NOT NULL UNIQUE CHECK (position >= 0),
+        name TEXT NOT NULL CHECK (length(trim(name)) > 0),
+        zone_id TEXT,
+        temperature_entity_id TEXT,
+        humidity_entity_id TEXT,
+        window_or_door_entity_ids_json TEXT
+          CHECK (window_or_door_entity_ids_json IS NULL OR json_valid(window_or_door_entity_ids_json)),
+        windows_json TEXT CHECK (windows_json IS NULL OR json_valid(windows_json)),
+        FOREIGN KEY (installation_singleton_key) REFERENCES installation(singleton_key) ON DELETE CASCADE
+      ) STRICT;
+
+      CREATE TABLE installation_climate_controller (
+        id TEXT PRIMARY KEY NOT NULL CHECK (length(trim(id)) > 0),
+        installation_singleton_key INTEGER NOT NULL DEFAULT 1 CHECK (installation_singleton_key = 1),
+        position INTEGER NOT NULL UNIQUE CHECK (position >= 0),
+        name TEXT NOT NULL CHECK (length(trim(name)) > 0),
+        entity_id TEXT NOT NULL UNIQUE CHECK (substr(entity_id, 1, 8) = 'climate.'),
+        location_type TEXT NOT NULL CHECK (location_type IN ('room', 'zone')),
+        room_id TEXT,
+        zone_id TEXT,
+        plant_id TEXT NOT NULL CHECK (length(trim(plant_id)) > 0),
+        capabilities_json TEXT NOT NULL CHECK (json_valid(capabilities_json)),
+        control_profile_json TEXT NOT NULL CHECK (json_valid(control_profile_json)),
+        manual_override_policy_json TEXT NOT NULL CHECK (json_valid(manual_override_policy_json)),
+        CHECK (
+          (location_type = 'room' AND room_id IS NOT NULL AND zone_id IS NULL)
+          OR (location_type = 'zone' AND zone_id IS NOT NULL AND room_id IS NULL)
+        ),
+        FOREIGN KEY (installation_singleton_key) REFERENCES installation(singleton_key) ON DELETE CASCADE
+      ) STRICT;
+
+      CREATE TABLE installation_schedule (
+        id TEXT PRIMARY KEY NOT NULL CHECK (length(trim(id)) > 0),
+        installation_singleton_key INTEGER NOT NULL DEFAULT 1 CHECK (installation_singleton_key = 1),
+        position INTEGER NOT NULL UNIQUE CHECK (position >= 0),
+        name TEXT NOT NULL CHECK (length(trim(name)) > 0),
+        FOREIGN KEY (installation_singleton_key) REFERENCES installation(singleton_key) ON DELETE CASCADE
+      ) STRICT;
+
+      CREATE TABLE installation_schedule_block (
+        schedule_id TEXT NOT NULL,
+        id TEXT NOT NULL CHECK (length(trim(id)) > 0),
+        day TEXT NOT NULL CHECK (
+          day IN ('monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday')
+        ),
+        position INTEGER NOT NULL CHECK (position >= 0),
+        location_type TEXT NOT NULL CHECK (location_type IN ('room', 'zone')),
+        room_id TEXT,
+        zone_id TEXT,
+        controller_id TEXT NOT NULL CHECK (length(trim(controller_id)) > 0),
+        start_minute INTEGER NOT NULL CHECK (start_minute BETWEEN 0 AND 1439),
+        end_minute INTEGER NOT NULL CHECK (end_minute BETWEEN 1 AND 1440),
+        settings_json TEXT NOT NULL CHECK (json_valid(settings_json)),
+        PRIMARY KEY (schedule_id, id),
+        UNIQUE (schedule_id, day, position),
+        CHECK (start_minute < end_minute),
+        CHECK (
+          (location_type = 'room' AND room_id IS NOT NULL AND zone_id IS NULL)
+          OR (location_type = 'zone' AND zone_id IS NOT NULL AND room_id IS NULL)
+        ),
+        FOREIGN KEY (schedule_id) REFERENCES installation_schedule(id) ON DELETE CASCADE
+      ) STRICT;
+
+      CREATE TABLE installation_schedule_selection (
+        singleton_key INTEGER PRIMARY KEY NOT NULL CHECK (singleton_key = 1),
+        main_schedule_id TEXT,
+        override_schedule_id TEXT,
+        FOREIGN KEY (singleton_key) REFERENCES installation(singleton_key) ON DELETE CASCADE
+      ) STRICT;
+    `,
+  },
+  {
+    id: '0004InstallationRevision',
+    sql: `
+      ALTER TABLE installation
+        ADD COLUMN revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0);
+    `,
+  },
 ] satisfies DatabaseMigration[];

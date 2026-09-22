@@ -181,6 +181,32 @@ describe('createAuthHttpHandler', () => {
     expect(harness.authenticateSession).toHaveBeenCalledWith(sessionToken);
   });
 
+  it('requires the canonical origin, cookie CSRF match, and session CSRF for mutations', async () => {
+    const harness = createHarness();
+    const cookie = authenticatedCookieHeader(harness.authCookies);
+    const mutation = (headers: AuthHttpRequest['headers']) =>
+      harness.boundary.authenticateMutationRequest(
+        request({ pathname: '/api/v1/installation/configuration', method: 'PUT', headers }),
+      );
+
+    await expect(
+      mutation({ cookie, csrfToken, origin: 'https://other.example' }),
+    ).resolves.toMatchObject({
+      status: 'rejected',
+      response: { statusCode: 403 },
+    });
+    await expect(mutation({ cookie, origin: publicOrigin })).resolves.toMatchObject({
+      status: 'rejected',
+      response: { statusCode: 403 },
+    });
+    await expect(mutation({ cookie, csrfToken, origin: publicOrigin })).resolves.toEqual({
+      status: 'authenticated',
+      session: authenticatedSession,
+    });
+    expect(harness.authenticateSessionWithCsrf).toHaveBeenCalledOnce();
+    expect(harness.authenticateSessionWithCsrf).toHaveBeenCalledWith(sessionToken, csrfToken);
+  });
+
   it('leaves unrelated paths unhandled and rejects unsupported methods', async () => {
     const { handler } = createHarness();
 

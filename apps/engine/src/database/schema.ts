@@ -3,6 +3,7 @@ import {
   blob,
   index,
   integer,
+  primaryKey,
   real,
   sqliteTable,
   text,
@@ -17,11 +18,123 @@ export const installationTable = sqliteTable('installation', {
   displayTemperatureUnit: text('display_temperature_unit', {
     enum: ['celsius', 'fahrenheit'],
   }).notNull(),
+  revision: integer('revision').notNull().default(0),
   minimumTargetTemperatureCelsius: real('minimum_target_temperature_celsius').notNull(),
   maximumTargetTemperatureCelsius: real('maximum_target_temperature_celsius').notNull(),
   maximumTelemetryAgeSeconds: real('maximum_telemetry_age_seconds').notNull(),
   minimumCommandIntervalSeconds: real('minimum_command_interval_seconds').notNull(),
   commandAcknowledgementTimeoutSeconds: real('command_acknowledgement_timeout_seconds').notNull(),
+});
+
+export const installationEnergySourceTable = sqliteTable('installation_energy_source', {
+  id: text('id').primaryKey(),
+  installationSingletonKey: integer('installation_singleton_key')
+    .notNull()
+    .default(1)
+    .references(() => installationTable.singletonKey, { onDelete: 'cascade' }),
+  position: integer('position').notNull().unique(),
+  name: text('name').notNull(),
+  type: text('type', { enum: ['electricity', 'gas', 'other'] }).notNull(),
+  tariffEntityId: text('tariff_entity_id'),
+  emissionsEntityId: text('emissions_entity_id'),
+  fixedUnitCost: real('fixed_unit_cost'),
+});
+
+export const installationPlantTable = sqliteTable('installation_plant', {
+  id: text('id').primaryKey(),
+  installationSingletonKey: integer('installation_singleton_key')
+    .notNull()
+    .default(1)
+    .references(() => installationTable.singletonKey, { onDelete: 'cascade' }),
+  position: integer('position').notNull().unique(),
+  name: text('name').notNull(),
+  type: text('type', { enum: ['boiler', 'heat_pump', 'hvac', 'other'] }).notNull(),
+  energySourceId: text('energy_source_id'),
+  constraintsJson: text('constraints_json'),
+  efficiencyModelJson: text('efficiency_model_json'),
+});
+
+export const installationZoneTable = sqliteTable('installation_zone', {
+  id: text('id').primaryKey(),
+  installationSingletonKey: integer('installation_singleton_key')
+    .notNull()
+    .default(1)
+    .references(() => installationTable.singletonKey, { onDelete: 'cascade' }),
+  position: integer('position').notNull().unique(),
+  name: text('name').notNull(),
+});
+
+export const installationRoomTable = sqliteTable('installation_room', {
+  id: text('id').primaryKey(),
+  installationSingletonKey: integer('installation_singleton_key')
+    .notNull()
+    .default(1)
+    .references(() => installationTable.singletonKey, { onDelete: 'cascade' }),
+  position: integer('position').notNull().unique(),
+  name: text('name').notNull(),
+  zoneId: text('zone_id'),
+  temperatureEntityId: text('temperature_entity_id'),
+  humidityEntityId: text('humidity_entity_id'),
+  windowOrDoorEntityIdsJson: text('window_or_door_entity_ids_json'),
+  windowsJson: text('windows_json'),
+});
+
+export const installationClimateControllerTable = sqliteTable('installation_climate_controller', {
+  id: text('id').primaryKey(),
+  installationSingletonKey: integer('installation_singleton_key')
+    .notNull()
+    .default(1)
+    .references(() => installationTable.singletonKey, { onDelete: 'cascade' }),
+  position: integer('position').notNull().unique(),
+  name: text('name').notNull(),
+  entityId: text('entity_id').notNull().unique(),
+  locationType: text('location_type', { enum: ['room', 'zone'] }).notNull(),
+  roomId: text('room_id'),
+  zoneId: text('zone_id'),
+  plantId: text('plant_id').notNull(),
+  capabilitiesJson: text('capabilities_json').notNull(),
+  controlProfileJson: text('control_profile_json').notNull(),
+  manualOverridePolicyJson: text('manual_override_policy_json').notNull(),
+});
+
+export const installationScheduleTable = sqliteTable('installation_schedule', {
+  id: text('id').primaryKey(),
+  installationSingletonKey: integer('installation_singleton_key')
+    .notNull()
+    .default(1)
+    .references(() => installationTable.singletonKey, { onDelete: 'cascade' }),
+  position: integer('position').notNull().unique(),
+  name: text('name').notNull(),
+});
+
+export const installationScheduleBlockTable = sqliteTable(
+  'installation_schedule_block',
+  {
+    scheduleId: text('schedule_id')
+      .notNull()
+      .references(() => installationScheduleTable.id, { onDelete: 'cascade' }),
+    id: text('id').notNull(),
+    day: text('day', {
+      enum: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'],
+    }).notNull(),
+    position: integer('position').notNull(),
+    locationType: text('location_type', { enum: ['room', 'zone'] }).notNull(),
+    roomId: text('room_id'),
+    zoneId: text('zone_id'),
+    controllerId: text('controller_id').notNull(),
+    startMinute: integer('start_minute').notNull(),
+    endMinute: integer('end_minute').notNull(),
+    settingsJson: text('settings_json').notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.scheduleId, table.id] })],
+);
+
+export const installationScheduleSelectionTable = sqliteTable('installation_schedule_selection', {
+  singletonKey: integer('singleton_key')
+    .primaryKey()
+    .references(() => installationTable.singletonKey, { onDelete: 'cascade' }),
+  mainScheduleId: text('main_schedule_id'),
+  overrideScheduleId: text('override_schedule_id'),
 });
 
 export const homeAssistantConnectionTable = sqliteTable('home_assistant_connection', {

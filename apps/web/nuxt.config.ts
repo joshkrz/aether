@@ -26,12 +26,11 @@ export default defineNuxtConfig({
       htmlAttrs: {
         lang: 'en',
       },
-      title: 'Aether — Hybrid climate control',
+      title: 'Aether — Whole-house climate scheduling',
       meta: [
         {
           name: 'description',
-          content:
-            'Aether coordinates comfortable, efficient heating and cooling through Home Assistant.',
+          content: 'Aether schedules heating and cooling across Home Assistant climate systems.',
         },
       ],
     },

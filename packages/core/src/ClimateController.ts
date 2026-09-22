@@ -1,11 +1,19 @@
 import * as z from 'zod';
 
 import { ClimateEntityIdSchema, HvacModeSchema } from './HomeAssistant.js';
-import { ClimateControllerIdSchema, PlantIdSchema } from './identifiers.js';
+import {
+  ClimateControllerIdSchema,
+  PlantIdSchema,
+  RoomIdSchema,
+  ZoneIdSchema,
+} from './identifiers.js';
 import { ManualOverridePolicySchema } from './ManualOverride.js';
 import { NonBlankStringSchema } from './schemaPrimitives.js';
 
-export const ControllerScopeSchema = z.enum(['local', 'shared']);
+export const ControllerLocationSchema = z.discriminatedUnion('type', [
+  z.strictObject({ type: z.literal('room'), roomId: RoomIdSchema }),
+  z.strictObject({ type: z.literal('zone'), zoneId: ZoneIdSchema }),
+]);
 
 export const ControllerCapabilitiesSchema = z
   .strictObject({
@@ -25,14 +33,14 @@ export const ClimateControllerSchema = z.strictObject({
   id: ClimateControllerIdSchema,
   name: NonBlankStringSchema,
   entityId: ClimateEntityIdSchema,
-  scope: ControllerScopeSchema,
+  location: ControllerLocationSchema,
   plantId: PlantIdSchema,
   capabilities: ControllerCapabilitiesSchema,
   controlProfile: ClimateControlProfileSchema,
   manualOverridePolicy: ManualOverridePolicySchema,
 });
 
-export type ControllerScope = z.infer<typeof ControllerScopeSchema>;
+export type ControllerLocation = z.infer<typeof ControllerLocationSchema>;
 export type ControllerCapabilities = z.infer<typeof ControllerCapabilitiesSchema>;
 export type ClimateControlProfile = z.infer<typeof ClimateControlProfileSchema>;
 export type ClimateController = z.infer<typeof ClimateControllerSchema>;

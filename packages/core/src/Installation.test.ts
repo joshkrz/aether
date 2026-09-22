@@ -14,14 +14,13 @@ const validInstallation = {
     minimumCommandIntervalSeconds: 30,
     commandAcknowledgementTimeoutSeconds: 15,
   },
+  zones: [],
   rooms: [],
   climateControllers: [],
   plants: [],
   energySources: [],
   schedules: [],
-  roomControllerLinks: [],
-  roomScheduleLinks: [],
-  roomScheduleSelections: [],
+  scheduleSelection: {},
 } as const;
 
 describe('TimeZoneSchema', () => {
@@ -53,6 +52,27 @@ describe('InstallationSchema', () => {
       InstallationSchema.safeParse({
         ...validInstallation,
         schedules: undefined,
+      }).success,
+    ).toBe(false);
+    expect(
+      InstallationSchema.safeParse({
+        ...validInstallation,
+        zones: undefined,
+      }).success,
+    ).toBe(false);
+    expect(
+      InstallationSchema.safeParse({
+        ...validInstallation,
+        scheduleSelection: undefined,
+      }).success,
+    ).toBe(false);
+  });
+
+  it('does not accept room-specific schedule links or selections', () => {
+    expect(
+      InstallationSchema.safeParse({
+        ...validInstallation,
+        roomScheduleSelections: [],
       }).success,
     ).toBe(false);
   });

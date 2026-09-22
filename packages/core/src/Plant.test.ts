@@ -45,6 +45,12 @@ describe('EfficiencyModelSchema', () => {
 });
 
 describe('PlantSchema', () => {
+  it('accepts a grouping-only HVAC plant', () => {
+    expect(PlantSchema.safeParse({ id: 'plant-hvac', name: 'HVAC', type: 'hvac' }).success).toBe(
+      true,
+    );
+  });
+
   it('accepts physical plant configuration', () => {
     expect(PlantSchema.safeParse(validPlant).success).toBe(true);
   });
